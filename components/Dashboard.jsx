@@ -64,6 +64,28 @@ export default function Dashboard() {
   const [toast, setToast] = useState(null);
   const [now, setNow] = useState(new Date());
 
+  // Every hook is declared here, before the loading return below, so the
+  // number of hooks is identical on every render (React rules of hooks).
+  const [capText, setCapText] = useState("");
+  const [capLoading, setCapLoading] = useState(false);
+  const [capVoice, setCapVoice] = useState("idle");
+  const [advice, setAdvice] = useState("");
+  const [adviceLoading, setAdviceLoading] = useState(false);
+  const [mealText, setMealText] = useState("");
+  const [mealLoading, setMealLoading] = useState(false);
+  const [jText, setJText] = useState("");
+  const [jVoice, setJVoice] = useState("idle");
+  const [jSaving, setJSaving] = useState(false);
+  const [crmFilter, setCrmFilter] = useState("All");
+  const [brainCat, setBrainCat] = useState(null);
+  const [brainSummary, setBrainSummary] = useState("");
+  const [brainLoading, setBrainLoading] = useState(false);
+  const [noteText, setNoteText] = useState("");
+  const [goalText, setGoalText] = useState("");
+  const [goalScope, setGoalScope] = useState("week");
+  const [accName, setAccName] = useState("");
+  const [accVal, setAccVal] = useState("");
+
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 30000);
     return () => clearInterval(t);
@@ -155,9 +177,6 @@ export default function Dashboard() {
   }
 
   /* ---------- capture ---------- */
-  const [capText, setCapText] = useState("");
-  const [capLoading, setCapLoading] = useState(false);
-  const [capVoice, setCapVoice] = useState("idle");
   async function capture() {
     if (!capText.trim()) return;
     setCapLoading(true);
@@ -168,8 +187,6 @@ export default function Dashboard() {
   }
 
   /* ---------- strategic ---------- */
-  const [advice, setAdvice] = useState("");
-  const [adviceLoading, setAdviceLoading] = useState(false);
   async function getAdvice() {
     setAdviceLoading(true); setAdvice("");
     const r = await post("/api/advice", {});
@@ -178,8 +195,6 @@ export default function Dashboard() {
   }
 
   /* ---------- nutrition ---------- */
-  const [mealText, setMealText] = useState("");
-  const [mealLoading, setMealLoading] = useState(false);
   async function logMeal() {
     if (!mealText.trim()) return;
     setMealLoading(true);
@@ -189,9 +204,6 @@ export default function Dashboard() {
   }
 
   /* ---------- journal ---------- */
-  const [jText, setJText] = useState("");
-  const [jVoice, setJVoice] = useState("idle");
-  const [jSaving, setJSaving] = useState(false);
   async function saveJournal() {
     if (!jText.trim()) return;
     setJSaving(true);
@@ -288,28 +300,6 @@ export default function Dashboard() {
     );
   }
 
-  function FinancePulse({ net, history }) {
-    const [show, setShow] = useState(false);
-    return (
-      <div className="panel finance-pulse">
-        <div className="panel-head">
-          <div className="panel-title"><Wallet size={14} /> Finance pulse</div>
-          <button className="icon-btn" onClick={() => setShow((s) => !s)}>{show ? <EyeOff size={14} /> : <Eye size={14} />}</button>
-        </div>
-        {show ? (
-          <div>
-            <div className="net">${net.toLocaleString()}</div>
-            <div className="net-label">net worth</div>
-            <Spark history={history} current={net} />
-          </div>
-        ) : (
-          <div className="hidden-net"><span /><span /><span /><div className="hidden-label">tap the eye to reveal</div></div>
-        )}
-      </div>
-    );
-  }
-
-  const [crmFilter, setCrmFilter] = useState("All");
   function renderCrm() {
     const order = { high: 0, medium: 1, low: 2 };
     const shown = activeTasks
@@ -355,10 +345,6 @@ export default function Dashboard() {
     );
   }
 
-  const [brainCat, setBrainCat] = useState(null);
-  const [brainSummary, setBrainSummary] = useState("");
-  const [brainLoading, setBrainLoading] = useState(false);
-  const [noteText, setNoteText] = useState("");
   async function summarizeCat(cat) {
     setBrainLoading(true); setBrainSummary("");
     const r = await post("/api/brain", { category: cat });
@@ -497,8 +483,6 @@ export default function Dashboard() {
     );
   }
 
-  const [goalText, setGoalText] = useState("");
-  const [goalScope, setGoalScope] = useState("week");
   function renderGoals() {
     return (
       <div>
@@ -528,8 +512,6 @@ export default function Dashboard() {
     );
   }
 
-  const [accName, setAccName] = useState("");
-  const [accVal, setAccVal] = useState("");
   function renderFinance() {
     const net = os.finance.accounts.reduce((a, b) => a + (Number(b.value) || 0), 0);
     return (
@@ -612,6 +594,27 @@ export default function Dashboard() {
 }
 
 /* ---------- pieces ---------- */
+function FinancePulse({ net, history }) {
+  const [show, setShow] = useState(false);
+  return (
+    <div className="panel finance-pulse">
+      <div className="panel-head">
+        <div className="panel-title"><Wallet size={14} /> Finance pulse</div>
+        <button className="icon-btn" onClick={() => setShow((s) => !s)}>{show ? <EyeOff size={14} /> : <Eye size={14} />}</button>
+      </div>
+      {show ? (
+        <div>
+          <div className="net">${net.toLocaleString()}</div>
+          <div className="net-label">net worth</div>
+          <Spark history={history} current={net} />
+        </div>
+      ) : (
+        <div className="hidden-net"><span /><span /><span /><div className="hidden-label">tap the eye to reveal</div></div>
+      )}
+    </div>
+  );
+}
+
 function Ring({ pct }) {
   const r = 46, c = 2 * Math.PI * r, off = c - (pct / 100) * c;
   return (
