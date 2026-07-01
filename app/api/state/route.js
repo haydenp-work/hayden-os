@@ -20,18 +20,26 @@ export async function GET() {
   const monday = mondayOf(now);
   const sunday = new Date(monday); sunday.setDate(monday.getDate() + 6);
 
-  // Materialize any recurring reminders due today (once per day).
+  // Materialize any recurring reminders due today, once per day, without duplicates.
   let recurring = [];
   try {
     const { data: rules } = await supabase.from("recurring_tasks").select("*").order("created_at");
     recurring = rules || [];
-    for (const r of recurring) {
-      if (r.weekday === now.getDay() && (!r.last_run || r.last_run < today)) {
-        await supabase.from("daily_tasks").insert({ title: r.title, day: today });
+  } catch (e) { recurring = []; }
+  try {
+    const due = recurring.filter((r) => r.weekday === now.getDay() && (!r.last_run || String(r.last_run) < today));
+    if (due.length) {
+      const { data: existing } = await supabase.from("daily_tasks").select("title").eq("day", today);
+      const have = new Set((existing || []).map((t) => t.title));
+      for (const r of due) {
+        if (!have.has(r.title)) {
+          await supabase.from("daily_tasks").insert({ title: r.title, day: today });
+          have.add(r.title);
+        }
         await supabase.from("recurring_tasks").update({ last_run: today }).eq("id", r.id);
       }
     }
-  } catch (e) { recurring = []; }
+  } catch (e) { /* materialization is best effort; never block the dashboard */ }
 
   const [profile, events, wtasks, dtasks, goals, meals, journal, settings, spend] = await Promise.all([
     supabase.from("profile").select("*").eq("id", 1).single(),
