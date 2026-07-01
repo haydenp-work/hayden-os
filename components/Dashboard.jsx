@@ -3,7 +3,7 @@ import React, { useState, useEffect, useRef } from "react";
 import {
   Home, ListTodo, Brain, Flame, Utensils, BookOpen, Target, Wallet,
   Mic, Plus, Star, Check, Sparkles, Eye, EyeOff, Trash2, Loader2,
-  X, ChevronRight, TrendingUp, Zap,
+  X, ChevronRight, TrendingUp, Zap, Camera,
 } from "lucide-react";
 import { CATEGORIES } from "@/lib/categories";
 
@@ -33,6 +33,19 @@ async function post(path, body) {
     body: JSON.stringify(body || {}),
   });
   return res.json();
+}
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => {
+      const [meta, data] = String(r.result).split(",");
+      const mediaType = (meta.match(/data:(.*?);/) || [])[1] || "image/png";
+      resolve({ data, mediaType });
+    };
+    r.onerror = reject;
+    r.readAsDataURL(file);
+  });
 }
 
 function startVoice(onText, onState) {
@@ -86,6 +99,10 @@ export default function Dashboard() {
   const [spentInput, setSpentInput] = useState("");
   const [limitInput, setLimitInput] = useState("");
   const [schedInput, setSchedInput] = useState("");
+  const [impSpend, setImpSpend] = useState(false);
+  const [impSched, setImpSched] = useState(false);
+  const spendFileRef = useRef(null);
+  const schedFileRef = useRef(null);
 
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 30000);
@@ -189,6 +206,34 @@ export default function Dashboard() {
     patch((p) => { p.schedule = { ...p.schedule, uploadedWeek: next }; return p; });
     mutate("schedule.uploaded", { week: next });
     flash(done ? "Reminder reset." : "Marked done for this week.");
+  }
+  async function importSpendShot(file) {
+    if (!file) return;
+    setImpSpend(true);
+    try {
+      const { data, mediaType } = await fileToBase64(file);
+      const r = await post("/api/import", { type: "spend", image: data, mediaType });
+      if (r && typeof r.newTotal === "number") {
+        patch((p) => { p.spend = { ...p.spend, spent: r.newTotal }; return p; });
+        flash(`Added $${r.added.toLocaleString()} from statement. Month total $${r.newTotal.toLocaleString()}.`);
+      } else flash("Could not read that statement. Try a clearer screenshot.");
+    } catch (e) { flash("Import failed. Try again."); }
+    setImpSpend(false);
+    if (spendFileRef.current) spendFileRef.current.value = "";
+  }
+  async function importSchedShot(file) {
+    if (!file) return;
+    setImpSched(true);
+    try {
+      const { data, mediaType } = await fileToBase64(file);
+      const r = await post("/api/import", { type: "schedule", image: data, mediaType });
+      if (r && Array.isArray(r.items) && r.items.length) {
+        patch((p) => { p.schedule = { ...p.schedule, entries: [...p.schedule.entries, ...r.items] }; return p; });
+        flash(`Added ${r.items.length} items from your schedule.`);
+      } else flash("Could not read that schedule. Try a clearer screenshot.");
+    } catch (e) { flash("Import failed. Try again."); }
+    setImpSched(false);
+    if (schedFileRef.current) schedFileRef.current.value = "";
   }
 
   /* ---------- capture ---------- */
@@ -336,6 +381,8 @@ export default function Dashboard() {
             <div className="cap" style={{ marginTop: 12 }}>
               <input className="cap-inp" placeholder="Add a schedule item, e.g. Mon 9am Duke call" value={schedInput} onChange={(e) => setSchedInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { addScheduleItem(schedInput); setSchedInput(""); } }} />
               <button className="cap-go" onClick={() => { addScheduleItem(schedInput); setSchedInput(""); }}>Add</button>
+              <input ref={schedFileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => importSchedShot(e.target.files && e.target.files[0])} />
+              <button className="cap-mic" title="Import from screenshot" onClick={() => schedFileRef.current && schedFileRef.current.click()} disabled={impSched}>{impSched ? <Loader2 size={15} className="spin" /> : <Camera size={15} />}</button>
             </div>
 
             <div className="list" style={{ marginTop: 8 }}>
@@ -618,6 +665,10 @@ export default function Dashboard() {
 
         <div className="panel" style={{ marginTop: 14 }}>
           <div className="plabel"><span className="num">09</span> UPDATE</div>
+          <input ref={spendFileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => importSpendShot(e.target.files && e.target.files[0])} />
+          <button className="solid-btn wide" style={{ marginBottom: 14 }} onClick={() => spendFileRef.current && spendFileRef.current.click()} disabled={impSpend}>
+            {impSpend ? <Loader2 size={14} className="spin" /> : <Camera size={14} />} Import statement screenshot
+          </button>
           <div className="sub-label">Month to date spend</div>
           <div className="note-add">
             <input className="inp" inputMode="decimal" placeholder={`Current spend, e.g. ${spent}`} value={spentInput} onChange={(e) => setSpentInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { setSpend(spentInput); setSpentInput(""); } }} />
