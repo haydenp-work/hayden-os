@@ -244,7 +244,6 @@ export default function Dashboard() {
       const r = await post("/api/import", { type: "schedule", image: data, mediaType });
       if (r && Array.isArray(r.events) && r.events.length) {
         patch((p) => { r.events.forEach((e) => { if (!p.events.some((x) => x.id === e.id)) p.events.push(e); }); });
-        await load();
         const f = r.events[0];
         const dName = new Date(f.day + "T12:00:00Z").toLocaleDateString([], { weekday: "short" });
         flash(`Added ${r.events.length} events. First: ${dName} ${minLabel(f.startMin)} ${f.title}.`);
