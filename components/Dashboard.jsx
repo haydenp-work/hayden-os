@@ -83,8 +83,9 @@ export default function Dashboard() {
   const [noteText, setNoteText] = useState("");
   const [goalText, setGoalText] = useState("");
   const [goalScope, setGoalScope] = useState("week");
-  const [accName, setAccName] = useState("");
-  const [accVal, setAccVal] = useState("");
+  const [spentInput, setSpentInput] = useState("");
+  const [limitInput, setLimitInput] = useState("");
+  const [schedInput, setSchedInput] = useState("");
 
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 30000);
@@ -160,20 +161,34 @@ export default function Dashboard() {
     patch((p) => { p.brainNotes = { ...p.brainNotes, [cat]: (p.brainNotes[cat] || []).filter((n) => n.id !== id) }; return p; });
     mutate("note.delete", { id });
   }
-  async function addAccount(name, value) {
-    if (!name.trim()) return;
-    const r = await mutate("account.add", { name: name.trim(), value });
-    patch((p) => { p.finance.accounts = [...p.finance.accounts, { id: r.id || uid(), name: name.trim(), value: Number(value) || 0 }]; return p; });
+  async function setSpend(amount) {
+    const v = Number(amount) || 0;
+    patch((p) => { p.spend = { ...p.spend, spent: v }; return p; });
+    await mutate("spend.set", { amount: v });
+    flash("Spend updated.");
   }
-  function delAccount(id) {
-    patch((p) => { p.finance.accounts = p.finance.accounts.filter((a) => a.id !== id); return p; });
-    mutate("account.delete", { id });
+  async function setLimit(amount) {
+    const v = Number(amount) || 0;
+    patch((p) => { p.spend = { ...p.spend, limit: v }; return p; });
+    await mutate("spend.limit", { amount: v });
+    flash("Limit updated.");
   }
-  function snapshot() {
-    const net = os.finance.accounts.reduce((a, b) => a + (Number(b.value) || 0), 0);
-    const day = new Date().toISOString().slice(0, 10);
-    patch((p) => { p.finance.history = [...p.finance.history.filter((h) => h.date !== day), { date: day, value: net }]; return p; });
-    mutate("finance.snapshot", {}); flash("Snapshot saved.");
+  async function addScheduleItem(body) {
+    if (!body.trim()) return;
+    const r = await mutate("schedule.add", { body: body.trim() });
+    patch((p) => { p.schedule = { ...p.schedule, entries: [...p.schedule.entries, { id: r.id || uid(), body: body.trim() }] }; return p; });
+  }
+  function delScheduleItem(id) {
+    patch((p) => { p.schedule = { ...p.schedule, entries: p.schedule.entries.filter((e) => e.id !== id) }; return p; });
+    mutate("schedule.delete", { id });
+  }
+  function toggleUploaded() {
+    const week = os.schedule.week;
+    const done = os.schedule.uploadedWeek === week;
+    const next = done ? "" : week;
+    patch((p) => { p.schedule = { ...p.schedule, uploadedWeek: next }; return p; });
+    mutate("schedule.uploaded", { week: next });
+    flash(done ? "Reminder reset." : "Marked done for this week.");
   }
 
   /* ---------- capture ---------- */
@@ -215,76 +230,133 @@ export default function Dashboard() {
   /* ===================== views ===================== */
   function renderHome() {
     const pct = habitPct();
-    const net = os.finance.accounts.reduce((a, b) => a + (Number(b.value) || 0), 0);
+    const spent = os.spend?.spent || 0;
+    const limit = os.spend?.limit || 4928;
+    const hour = now.getHours();
+    const greet = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
+    const focus = os.goals.find((g) => g.scope === "month" && !g.done)?.text || "Set a monthly goal";
+    const cals = os.meals.reduce((a, b) => a + b.calories, 0);
+    const pro = os.meals.reduce((a, b) => a + b.protein, 0);
+    const sow = new Date(now); sow.setDate(now.getDate() - now.getDay());
+    const week = [...Array(7)].map((_, i) => { const d = new Date(sow); d.setDate(sow.getDate() + i); return d; });
+    const dow = ["SU", "MO", "TU", "WE", "TH", "FR", "SA"];
+    const isFriday = now.getDay() === 5;
+    const uploadedThisWeek = !!(os.schedule?.uploadedWeek && os.schedule.uploadedWeek === os.schedule.week);
+
     return (
-      <div className="grid">
-        <div className="panel span2">
-          <div className="op-row">
-            <div>
-              <div className="eyebrow">Operator</div>
-              <div className="op-name">{os.profile.name}</div>
-              <div className="op-sub">{os.profile.role}{os.profile.org ? ` at ${os.profile.org}` : ""}</div>
+      <div className="cols">
+        {/* LEFT */}
+        <div className="col">
+          <div className="panel">
+            <div className="plabel"><span className="num">00</span> OPERATOR <span className="live"><span className="dot" /> online</span></div>
+            <div className="op-name">{os.profile.name}</div>
+            <div className="op-sub">{os.profile.role}{os.profile.org ? ` · ${os.profile.org}` : ""}</div>
+            <div className="op-meta">
+              <div><div className="mk">Focus</div><div className="mv serif">{focus}</div></div>
+              <div><div className="mk">Today</div><div className="mv mono">{pct}%</div></div>
             </div>
-            <div className="op-clock">
-              <div className="clock-time">{now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</div>
-              <div className="clock-date">{now.toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" })}</div>
-              <div className="live"><span className="dot" /> systems online</div>
+          </div>
+
+          <SpendPanel spent={spent} limit={limit} history={os.spend?.history || []} />
+
+          <div className="panel">
+            <div className="plabel"><span className="num">04</span> KEY TASKS <span className="pcount">{keyTasks.length}</span></div>
+            {keyTasks.length === 0 && <div className="empty">Star 3 to 5 tasks to set today's priorities.</div>}
+            <div className="list">
+              {keyTasks.map((t) => (
+                <div key={t.id} className="row">
+                  <button className="check" onClick={() => completeTask(t.id)}><Check size={13} /></button>
+                  <span className="row-title">{t.title}</span>
+                  <span className="dot-pri" style={{ background: priColor(t.priority) }} />
+                </div>
+              ))}
             </div>
           </div>
         </div>
 
-        <FinancePulse net={net} history={os.finance.history} />
-
-        <div className="panel">
-          <div className="panel-head"><div className="panel-title"><Star size={14} /> Key tasks</div><span className="count">{keyTasks.length}</span></div>
-          {keyTasks.length === 0 && <div className="empty">Star 3 to 5 tasks to set today's priorities.</div>}
-          <div className="list">
-            {keyTasks.map((t) => (
-              <div key={t.id} className="row">
-                <button className="check" onClick={() => completeTask(t.id)}><Check size={13} /></button>
-                <span className="row-title">{t.title}</span>
-                <span className="pill" style={{ color: priColor(t.priority), borderColor: priColor(t.priority) }}>{t.priority}</span>
-              </div>
-            ))}
+        {/* MIDDLE */}
+        <div className="col">
+          <div className="panel session">
+            <div className="plabel"><span className="num">01</span> SESSION <span className="pcount mono">{now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false })} LOCAL</span></div>
+            <div className="greeting">{greet}, <span className="g-name">{os.profile.name}</span>.</div>
+            <div className="sess-date">{now.toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" })}</div>
+            <div className="cap">
+              <input className="cap-inp" placeholder="Capture anything. Claude files it." value={capText} onChange={(e) => setCapText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") capture(); }} />
+              <button className={capVoice === "listening" ? "cap-mic rec" : "cap-mic"} onClick={() => startVoice((t) => setCapText((p) => (p ? p + " " : "") + t), setCapVoice)}><Mic size={15} /></button>
+              <button className="cap-go" onClick={capture} disabled={capLoading}>{capLoading ? <Loader2 size={14} className="spin" /> : "Capture"}</button>
+            </div>
           </div>
-        </div>
 
-        <div className="panel">
-          <div className="panel-head"><div className="panel-title"><Flame size={14} /> Daily habits</div></div>
-          <div className="ring-wrap">
-            <Ring pct={pct} />
-            <div className="ring-legend">
+          <div className="panel">
+            <div className="plabel"><span className="num">02</span> HABITS <span className="pcount mono">{pct}%</span></div>
+            <div className="habit-cards">
               {os.habits.map((h) => {
                 const done = h.subtasks.filter((s) => s.done).length;
+                const full = h.subtasks.length && done === h.subtasks.length;
+                const w = h.subtasks.length ? (done / h.subtasks.length) * 100 : 0;
                 return (
-                  <div key={h.id} className="legend-row">
-                    <span className={done === h.subtasks.length && h.subtasks.length ? "leg-dot done" : "leg-dot"} />
-                    <span className="leg-name">{h.name}</span>
-                    <span className="leg-frac">{done}/{h.subtasks.length}</span>
-                  </div>
+                  <button key={h.id} className={full ? "hcard full" : "hcard"} onClick={() => setView("habits")}>
+                    <div className="hc-top"><span className="hc-name">{h.name}</span>{full ? <Check size={13} color="var(--accent)" /> : null}</div>
+                    <div className="hc-bar"><span style={{ width: w + "%" }} /></div>
+                    <div className="hc-frac mono">{done}/{h.subtasks.length}</div>
+                  </button>
                 );
               })}
             </div>
           </div>
-        </div>
 
-        <div className="panel span2">
-          <div className="panel-head">
-            <div className="panel-title"><Zap size={14} /> Strategic read</div>
-            <button className="ghost-btn" onClick={getAdvice} disabled={adviceLoading}>
-              {adviceLoading ? <Loader2 size={13} className="spin" /> : <Sparkles size={13} />}
-              {adviceLoading ? "Thinking" : "Top 3 right now"}
-            </button>
+          <div className="panel">
+            <div className="plabel"><span className="num">05</span> STRATEGIC READ
+              <button className="ghost-btn sm" onClick={getAdvice} disabled={adviceLoading}>{adviceLoading ? <Loader2 size={12} className="spin" /> : <Sparkles size={12} />} {adviceLoading ? "Thinking" : "Top 3"}</button>
+            </div>
+            {!advice && !adviceLoading && <div className="empty">Ask Claude what to prioritize across every task and goal.</div>}
+            {advice && <div className="advice">{advice.split("\n").filter(Boolean).map((l, i) => <p key={i}>{l}</p>)}</div>}
           </div>
-          {!advice && !adviceLoading && <div className="empty">Ask Claude what to prioritize across every task and goal.</div>}
-          {advice && <div className="advice">{advice.split("\n").filter(Boolean).map((l, i) => <p key={i}>{l}</p>)}</div>}
+
+          <div className="panel">
+            <div className="plabel"><span className="num">06</span> SCHEDULE <span className="pcount mono">{now.toLocaleDateString([], { month: "short", year: "numeric" }).toUpperCase()}</span></div>
+            <div className="cal-strip">
+              {week.map((d, i) => {
+                const isToday = d.toDateString() === now.toDateString();
+                return (
+                  <div key={i} className={isToday ? "cal-day on" : "cal-day"}>
+                    <div className="cal-dow">{dow[d.getDay()]}</div>
+                    <div className="cal-num mono">{d.getDate()}</div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <button className={uploadedThisWeek ? "reminder done" : (isFriday ? "reminder due" : "reminder")} onClick={toggleUploaded}>
+              <span className="rem-box">{uploadedThisWeek && <Check size={12} />}</span>
+              <span className="rem-text">Upload next week's schedule</span>
+              <span className="rem-tag mono">{uploadedThisWeek ? "done" : isFriday ? "due today" : "every Fri"}</span>
+            </button>
+
+            <div className="cap" style={{ marginTop: 12 }}>
+              <input className="cap-inp" placeholder="Add a schedule item, e.g. Mon 9am Duke call" value={schedInput} onChange={(e) => setSchedInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { addScheduleItem(schedInput); setSchedInput(""); } }} />
+              <button className="cap-go" onClick={() => { addScheduleItem(schedInput); setSchedInput(""); }}>Add</button>
+            </div>
+
+            <div className="list" style={{ marginTop: 8 }}>
+              {os.schedule.entries.length === 0 && <div className="empty">No schedule items yet. Add your week above.</div>}
+              {os.schedule.entries.map((e) => (
+                <div key={e.id} className="row">
+                  <span className="dot-pri" style={{ background: "var(--accent)" }} />
+                  <span className="row-title">{e.body}</span>
+                  <button className="icon-btn faint" onClick={() => delScheduleItem(e.id)}><X size={13} /></button>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
 
-        <div className="panel span2">
-          <div className="panel-head"><div className="panel-title"><Target size={14} /> Goals</div></div>
-          <div className="goals-grid">
+        {/* RIGHT */}
+        <div className="col">
+          <div className="panel">
+            <div className="plabel"><span className="num">03</span> GOALS</div>
             {["week", "month"].map((sc) => (
-              <div key={sc} className="goal-col">
+              <div key={sc} className="goal-block">
                 <div className="goal-scope">This {sc}</div>
                 {os.goals.filter((g) => g.scope === sc).length === 0 && <div className="empty">No {sc} goals yet.</div>}
                 {os.goals.filter((g) => g.scope === sc).map((g) => (
@@ -294,6 +366,16 @@ export default function Dashboard() {
                 ))}
               </div>
             ))}
+          </div>
+
+          <div className="panel">
+            <div className="plabel"><span className="num">07</span> NUTRITION <span className="pcount mono">TODAY</span></div>
+            <div className="nut-big mono">{cals}<span className="nut-unit">kcal</span></div>
+            <div className="nut-sub mono">{pro}g protein · {os.meals.length} meals</div>
+            <div className="cap" style={{ marginTop: 12 }}>
+              <input className="cap-inp" placeholder="Log a meal, e.g. chicken and rice" value={mealText} onChange={(e) => setMealText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") logMeal(); }} />
+              <button className="cap-go" onClick={logMeal} disabled={mealLoading}>{mealLoading ? <Loader2 size={14} className="spin" /> : "Log"}</button>
+            </div>
           </div>
         </div>
       </div>
@@ -513,34 +595,47 @@ export default function Dashboard() {
   }
 
   function renderFinance() {
-    const net = os.finance.accounts.reduce((a, b) => a + (Number(b.value) || 0), 0);
+    const spent = os.spend?.spent || 0;
+    const limit = os.spend?.limit || 4928;
+    const remaining = limit - spent;
+    const pctSpent = limit ? Math.min(100, (spent / limit) * 100) : 0;
+    const status = pctSpent >= 100 ? "over" : pctSpent >= 85 ? "warn" : "ok";
+    const statusColor = status === "over" ? "var(--accent)" : status === "warn" ? "var(--gold)" : "var(--accent)";
+    const barColor = status === "over" ? "#e2544f" : status === "warn" ? "var(--gold)" : "var(--accent)";
+    const history = (os.spend?.history || []).map((h) => ({ value: h.spent }));
     return (
-      <div>
+      <div style={{ maxWidth: 640 }}>
         <div className="panel">
-          <div className="panel-head"><div className="panel-title"><TrendingUp size={14} /> Net worth</div>
-            <button className="ghost-btn" onClick={snapshot}><Plus size={13} /> Snapshot</button>
+          <div className="plabel"><span className="num">08</span> MONTHLY SPEND <span className="pcount mono">{os.spend?.month}</span></div>
+          <div className="net big mono" style={{ color: barColor }}>${spent.toLocaleString()}</div>
+          <div className="net-label">of ${limit.toLocaleString()} limit</div>
+          <div className="spend-bar"><span style={{ width: pctSpent + "%", background: barColor }} /></div>
+          <div className="spend-foot mono">
+            <span style={{ color: barColor }}>{Math.round(pctSpent)}% used</span>
+            <span>{remaining >= 0 ? `$${remaining.toLocaleString()} left` : `$${Math.abs(remaining).toLocaleString()} over`}</span>
           </div>
-          <div className="net big">${net.toLocaleString()}</div>
-          <Spark history={os.finance.history} current={net} big />
         </div>
+
         <div className="panel" style={{ marginTop: 14 }}>
-          <div className="panel-head"><div className="panel-title">Accounts</div></div>
+          <div className="plabel"><span className="num">09</span> UPDATE</div>
+          <div className="sub-label">Month to date spend</div>
           <div className="note-add">
-            <input className="inp" placeholder="Account name" value={accName} onChange={(e) => setAccName(e.target.value)} />
-            <input className="inp" style={{ maxWidth: 130 }} placeholder="Value" inputMode="decimal" value={accVal} onChange={(e) => setAccVal(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { addAccount(accName, accVal); setAccName(""); setAccVal(""); } }} />
-            <button className="solid-btn" onClick={() => { addAccount(accName, accVal); setAccName(""); setAccVal(""); }}><Plus size={14} /></button>
+            <input className="inp" inputMode="decimal" placeholder={`Current spend, e.g. ${spent}`} value={spentInput} onChange={(e) => setSpentInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { setSpend(spentInput); setSpentInput(""); } }} />
+            <button className="solid-btn" onClick={() => { setSpend(spentInput); setSpentInput(""); }}>Save</button>
           </div>
-          {os.finance.accounts.length === 0 && <div className="empty">Add your accounts to build your net worth.</div>}
-          <div className="list">
-            {os.finance.accounts.map((a) => (
-              <div key={a.id} className="row">
-                <span className="row-title">{a.name}</span>
-                <span className="mono">${Number(a.value).toLocaleString()}</span>
-                <button className="icon-btn faint" onClick={() => delAccount(a.id)}><Trash2 size={13} /></button>
-              </div>
-            ))}
+          <div className="sub-label">Monthly limit</div>
+          <div className="note-add">
+            <input className="inp" inputMode="decimal" placeholder={`${limit}`} value={limitInput} onChange={(e) => setLimitInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { setLimit(limitInput); setLimitInput(""); } }} />
+            <button className="ghost-btn" onClick={() => { setLimit(limitInput); setLimitInput(""); }}>Set limit</button>
           </div>
         </div>
+
+        {history.length >= 2 && (
+          <div className="panel" style={{ marginTop: 14 }}>
+            <div className="plabel"><span className="num">10</span> TREND</div>
+            <Spark history={history.slice(0, -1)} current={spent} big />
+          </div>
+        )}
       </div>
     );
   }
@@ -552,38 +647,22 @@ export default function Dashboard() {
     <>
       <Style />
       <div className="os">
-        <aside className="os-sidebar">
-          <div className="brand"><span className="brand-mark" /><span className="brand-name">HaydenOS</span></div>
-          <nav>
-            {NAV.map((n) => {
-              const I = n.icon;
-              return (
-                <button key={n.id} className={view === n.id ? "nav on" : "nav"} onClick={() => { setView(n.id); setBrainCat(null); }}>
-                  <I size={17} /><span className="os-navlabel">{n.label}</span>
-                </button>
-              );
-            })}
+        <header className="topbar">
+          <div className="brand"><span className="brand-mark" /><span className="brand-name">HAYDEN OS</span><span className="brand-ver">// V1</span></div>
+          <nav className="topnav">
+            {NAV.map((n) => (
+              <button key={n.id} className={view === n.id ? "tab on" : "tab"} onClick={() => { setView(n.id); setBrainCat(null); }}>{n.label}</button>
+            ))}
           </nav>
-        </aside>
+          <div className="topstat">
+            <span className="ts-date">{now.toLocaleDateString([], { month: "short", day: "2-digit", year: "numeric" }).toUpperCase()}</span>
+            <span className="ts-time">{now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false })}</span>
+            <span className="ts-live"><span className="dot" /> LIVE</span>
+          </div>
+        </header>
 
         <main className="os-main">
-          <div className="capture-bar">
-            <Sparkles size={15} className="cap-spark" />
-            <input
-              className="capture-inp"
-              placeholder="Capture anything. Claude sorts it into the right place."
-              value={capText}
-              onChange={(e) => setCapText(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") capture(); }}
-            />
-            <button className={capVoice === "listening" ? "cap-mic rec" : "cap-mic"} onClick={() => startVoice((t) => setCapText((p) => (p ? p + " " : "") + t), setCapVoice)} title="Voice capture">
-              <Mic size={16} />
-            </button>
-            <button className="cap-btn" onClick={capture} disabled={capLoading}>
-              {capLoading ? <Loader2 size={15} className="spin" /> : <Plus size={15} />} Capture
-            </button>
-          </div>
-          <div className="view-head"><h1>{title}</h1></div>
+          {view !== "home" && <div className="view-head"><h1>{title}</h1></div>}
           <div className="view-body">{VIEWS[view]()}</div>
         </main>
 
@@ -594,23 +673,21 @@ export default function Dashboard() {
 }
 
 /* ---------- pieces ---------- */
-function FinancePulse({ net, history }) {
-  const [show, setShow] = useState(false);
+function SpendPanel({ spent, limit, history }) {
+  const remaining = limit - spent;
+  const pctSpent = limit ? Math.min(100, (spent / limit) * 100) : 0;
+  const over = pctSpent >= 100, warn = pctSpent >= 85;
+  const barColor = over ? "#e2544f" : warn ? "var(--gold)" : "var(--accent)";
   return (
-    <div className="panel finance-pulse">
-      <div className="panel-head">
-        <div className="panel-title"><Wallet size={14} /> Finance pulse</div>
-        <button className="icon-btn" onClick={() => setShow((s) => !s)}>{show ? <EyeOff size={14} /> : <Eye size={14} />}</button>
+    <div className="panel">
+      <div className="plabel"><span className="num">0S</span> SPEND <span className="pcount mono">MONTH</span></div>
+      <div className="net mono" style={{ color: barColor }}>${spent.toLocaleString()}</div>
+      <div className="net-label">of ${limit.toLocaleString()} limit</div>
+      <div className="spend-bar"><span style={{ width: pctSpent + "%", background: barColor }} /></div>
+      <div className="spend-foot mono">
+        <span style={{ color: barColor }}>{Math.round(pctSpent)}%</span>
+        <span>{remaining >= 0 ? `$${remaining.toLocaleString()} left` : `$${Math.abs(remaining).toLocaleString()} over`}</span>
       </div>
-      {show ? (
-        <div>
-          <div className="net">${net.toLocaleString()}</div>
-          <div className="net-label">net worth</div>
-          <Spark history={history} current={net} />
-        </div>
-      ) : (
-        <div className="hidden-net"><span /><span /><span /><div className="hidden-label">tap the eye to reveal</div></div>
-      )}
     </div>
   );
 }
@@ -629,13 +706,16 @@ function Ring({ pct }) {
 
 function Spark({ history, current, big }) {
   const pts = [...(history || []).map((h) => h.value), current];
-  if (pts.length < 2) return <div className="spark-empty">Take a snapshot to start the trend.</div>;
-  const w = 260, h = big ? 70 : 44, min = Math.min(...pts), max = Math.max(...pts), span = max - min || 1;
+  if (pts.length < 2) return <div className="spark-empty">Log two months to see the trend.</div>;
+  const w = 260, h = big ? 70 : 46, min = Math.min(...pts), max = Math.max(...pts), span = max - min || 1;
   const step = w / (pts.length - 1);
-  const d = pts.map((v, i) => `${i === 0 ? "M" : "L"}${(i * step).toFixed(1)},${(h - ((v - min) / span) * (h - 8) - 4).toFixed(1)}`).join(" ");
+  const line = pts.map((v, i) => `${i === 0 ? "M" : "L"}${(i * step).toFixed(1)},${(h - ((v - min) / span) * (h - 10) - 5).toFixed(1)}`).join(" ");
+  const area = `${line} L${w},${h} L0,${h} Z`;
   return (
     <svg width="100%" viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" className="spark">
-      <path d={d} fill="none" stroke="var(--gold)" strokeWidth="2" />
+      <defs><linearGradient id="sparkg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="var(--accent)" stopOpacity="0.35" /><stop offset="1" stopColor="var(--accent)" stopOpacity="0" /></linearGradient></defs>
+      <path d={area} fill="url(#sparkg)" stroke="none" />
+      <path d={line} fill="none" stroke="var(--accent)" strokeWidth="1.75" />
     </svg>
   );
 }
@@ -658,146 +738,230 @@ function JournalRow({ j }) {
 function Style() {
   return (
     <style>{`
+@import url('https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400;1,6..72,500&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
 :root{
-  --bg:#0a0d14; --bg2:#0f131d; --bg3:#161c29; --border:#1d2433; --border2:#2a3346;
-  --text:#e7ecf5; --muted:#8893a8; --faint:#5b6478;
-  --accent:#e23a52; --gold:#e0a850; --teal:#34c6d8; --blue:#5a93d4;
-  --accent-dim:rgba(226,58,82,.13); --teal-dim:rgba(52,198,216,.12); --gold-dim:rgba(224,168,80,.12);
-  --sans:'Inter',system-ui,sans-serif; --disp:'Space Grotesk',system-ui,sans-serif; --mono:'JetBrains Mono',ui-monospace,monospace;
+  --bg:#05080d; --bg2:#0a0f16; --bg3:#10161f; --line:#182029; --line2:#232d38;
+  --text:#e6ecf2; --muted:#7b8794; --faint:#4b5563;
+  --accent:#35d6be; --accent2:#2bb89f; --gold:#d9b46a; --blue:#5a93d4;
+  --accent-dim:rgba(53,214,190,.12); --accent-dim2:rgba(53,214,190,.06); --gold-dim:rgba(217,180,106,.12);
+  --sans:'Inter',system-ui,sans-serif; --serif:'Newsreader',Georgia,serif; --mono:'JetBrains Mono',ui-monospace,monospace;
 }
 *{box-sizing:border-box}
-.os{display:flex;min-height:100vh;background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14px}
+.os{min-height:100vh;background:radial-gradient(1200px 600px at 70% -10%,rgba(53,214,190,.05),transparent),var(--bg);color:var(--text);font-family:var(--sans);font-size:14px;display:flex;flex-direction:column}
 .os .mono{font-family:var(--mono)}
+.os .serif{font-family:var(--serif)}
 .os.boot{align-items:center;justify-content:center;gap:12px;color:var(--muted)}
 .spin{animation:spin 1s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
-.os-sidebar{width:204px;flex:none;background:var(--bg2);border-right:1px solid var(--border);padding:18px 12px;display:flex;flex-direction:column;gap:6px;position:sticky;top:0;height:100vh}
-.brand{display:flex;align-items:center;gap:9px;padding:4px 8px 16px}
-.brand-mark{width:13px;height:13px;border-radius:4px;background:linear-gradient(135deg,var(--accent),var(--teal));box-shadow:0 0 12px var(--accent-dim)}
-.brand-name{font-family:var(--disp);font-weight:700;letter-spacing:-.02em;font-size:15px}
-.nav{display:flex;align-items:center;gap:11px;padding:9px 11px;border-radius:9px;background:none;border:none;color:var(--muted);cursor:pointer;font-family:var(--sans);font-size:13.5px;font-weight:500;width:100%;text-align:left;transition:.15s}
-.nav:hover{background:var(--bg3);color:var(--text)}
-.nav.on{background:var(--accent-dim);color:var(--text)}.nav.on svg{color:var(--accent)}
-.os-main{flex:1;min-width:0;display:flex;flex-direction:column}
-.capture-bar{display:flex;align-items:center;gap:9px;padding:14px 22px;background:var(--bg2);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:10}
-.cap-spark{color:var(--teal);flex:none}
-.capture-inp{flex:1;background:var(--bg3);border:1px solid var(--border);border-radius:9px;padding:10px 13px;color:var(--text);font-family:var(--sans);font-size:13.5px;outline:none;transition:.15s;min-width:0}
-.capture-inp:focus{border-color:var(--teal)}.capture-inp::placeholder{color:var(--faint)}
-.cap-mic{flex:none;width:38px;height:38px;border-radius:9px;background:var(--bg3);border:1px solid var(--border);color:var(--muted);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:.15s}
-.cap-mic:hover{color:var(--text);border-color:var(--border2)}
-.cap-mic.rec{color:var(--accent);border-color:var(--accent)}
-.cap-btn{flex:none;display:flex;align-items:center;gap:6px;background:var(--accent);color:#fff;border:none;border-radius:9px;padding:10px 16px;font-family:var(--sans);font-weight:600;font-size:13px;cursor:pointer;transition:.15s}
-.cap-btn:hover{filter:brightness(1.08)}.cap-btn:disabled{opacity:.6;cursor:default}
-.view-head{padding:20px 22px 4px}
-.view-head h1{margin:0;font-family:var(--disp);font-weight:600;font-size:23px;letter-spacing:-.02em}
-.view-body{padding:14px 22px 40px}
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
-.span2{grid-column:1 / -1}
-.panel{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:16px}
+
+/* top bar */
+.topbar{display:flex;align-items:center;gap:22px;padding:0 22px;height:52px;background:rgba(8,12,18,.85);backdrop-filter:blur(8px);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:20}
+.brand{display:flex;align-items:center;gap:8px;flex:none}
+.brand-mark{width:11px;height:11px;border-radius:3px;background:linear-gradient(135deg,var(--accent),var(--accent2));box-shadow:0 0 12px var(--accent-dim)}
+.brand-name{font-family:var(--mono);font-weight:500;font-size:13px;letter-spacing:.14em}
+.brand-ver{font-family:var(--mono);font-size:11px;color:var(--faint);letter-spacing:.1em}
+.topnav{display:flex;gap:2px;flex:1;overflow-x:auto}
+.tab{background:none;border:none;color:var(--muted);font-family:var(--mono);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;padding:8px 12px;border-radius:6px;cursor:pointer;white-space:nowrap;transition:.15s}
+.tab:hover{color:var(--text)}
+.tab.on{color:var(--text);background:var(--accent-dim);box-shadow:inset 0 -2px 0 var(--accent)}
+.topstat{display:flex;align-items:center;gap:14px;flex:none;font-family:var(--mono);font-size:11px;letter-spacing:.08em;color:var(--muted)}
+.ts-time{color:var(--text)}
+.ts-live{display:flex;align-items:center;gap:6px;color:var(--accent)}
+.ts-live .dot,.live .dot{width:6px;height:6px;border-radius:50%;background:var(--accent);box-shadow:0 0 8px var(--accent)}
+
+/* main */
+.os-main{flex:1;min-width:0;padding:18px 22px 40px;max-width:1500px;width:100%;margin:0 auto}
+.view-head{padding:6px 2px 16px}
+.view-head h1{margin:0;font-family:var(--serif);font-weight:500;font-size:26px;letter-spacing:-.01em}
+
+/* columns */
+.cols{display:grid;grid-template-columns:320px minmax(0,1fr) 320px;gap:14px;align-items:start}
+.col{display:flex;flex-direction:column;gap:14px;min-width:0}
+
+/* panel */
+.panel{background:linear-gradient(var(--bg2),var(--bg2)) padding-box;border:1px solid var(--line);border-radius:12px;padding:16px}
+.plabel{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted);margin-bottom:14px}
+.plabel .num{color:var(--accent);opacity:.8}
+.plabel .live{margin-left:auto;display:flex;align-items:center;gap:6px;color:var(--accent);letter-spacing:.1em}
+.pcount{margin-left:auto;color:var(--faint);letter-spacing:.08em}
+.empty{color:var(--faint);font-size:13px;padding:6px 2px;line-height:1.5}
+
+/* legacy panel head/title (other views) */
 .panel-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
-.panel-title{display:flex;align-items:center;gap:7px;font-family:var(--disp);font-weight:600;font-size:13.5px;color:var(--text)}
-.panel-title svg{color:var(--muted)}
-.count{font-family:var(--mono);font-size:12px;color:var(--muted);background:var(--bg3);padding:2px 8px;border-radius:20px}
-.eyebrow{font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);margin-bottom:7px}
-.empty{color:var(--faint);font-size:13px;padding:8px 2px;line-height:1.5}
-.sub-label{font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);margin:16px 0 8px}
-.op-row{display:flex;justify-content:space-between;align-items:flex-start}
-.op-name{font-family:var(--disp);font-weight:700;font-size:26px;letter-spacing:-.02em;line-height:1.1}
-.op-sub{color:var(--muted);font-size:13px;margin-top:3px}
-.op-clock{text-align:right}
-.clock-time{font-family:var(--mono);font-size:22px;letter-spacing:-.01em}
-.clock-date{color:var(--muted);font-size:12px;margin-top:2px}
-.live{display:flex;align-items:center;justify-content:flex-end;gap:6px;font-size:11px;color:var(--teal);margin-top:8px}
-.live .dot{width:6px;height:6px;border-radius:50%;background:var(--teal);box-shadow:0 0 8px var(--teal)}
-.finance-pulse .net{font-family:var(--mono);font-size:26px;letter-spacing:-.02em}
+.panel-title{display:flex;align-items:center;gap:7px;font-family:var(--mono);font-weight:500;font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--text)}
+.panel-title svg{color:var(--accent)}
+.count{font-family:var(--mono);font-size:11px;color:var(--muted);background:var(--bg3);padding:2px 8px;border-radius:20px}
+.sub-label{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--faint);margin:16px 0 8px;font-family:var(--mono)}
+
+/* operator */
+.op-name{font-family:var(--serif);font-weight:500;font-size:28px;letter-spacing:-.01em;line-height:1.05}
+.op-sub{color:var(--muted);font-size:12.5px;margin-top:5px}
+.op-meta{display:flex;gap:22px;margin-top:16px;padding-top:14px;border-top:1px solid var(--line)}
+.mk{font-family:var(--mono);font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);margin-bottom:5px}
+.mv{font-size:14px;color:var(--text)}
+.mv.serif{font-style:italic;font-size:15px}
+.mv.mono{font-size:16px}
+
+/* session greeting */
+.session{background:radial-gradient(500px 200px at 90% -30%,var(--accent-dim2),transparent),var(--bg2)}
+.greeting{font-family:var(--serif);font-weight:400;font-size:30px;letter-spacing:-.01em;line-height:1.15}
+.g-name{font-style:italic}
+.sess-date{color:var(--muted);font-size:12.5px;margin-top:4px}
+.cap{display:flex;gap:8px;margin-top:16px}
+.cap-inp{flex:1;background:var(--bg3);border:1px solid var(--line);border-radius:9px;padding:11px 13px;color:var(--text);font-family:var(--sans);font-size:13.5px;outline:none;min-width:0;transition:.15s}
+.cap-inp:focus{border-color:var(--accent)}.cap-inp::placeholder{color:var(--faint)}
+.cap-mic{flex:none;width:40px;border-radius:9px;background:var(--bg3);border:1px solid var(--line);color:var(--muted);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:.15s}
+.cap-mic:hover{color:var(--text)}.cap-mic.rec{color:var(--accent);border-color:var(--accent)}
+.cap-go{flex:none;background:var(--accent);color:#04201c;border:none;border-radius:9px;padding:0 16px;font-family:var(--mono);font-size:12px;letter-spacing:.06em;text-transform:uppercase;font-weight:500;cursor:pointer;display:flex;align-items:center;transition:.15s}
+.cap-go:hover{filter:brightness(1.08)}.cap-go:disabled{opacity:.6}
+
+/* finance / spend */
+.net{font-family:var(--mono);font-size:27px;letter-spacing:-.02em}
 .net.big{font-size:38px}
-.net-label{color:var(--muted);font-size:11px;letter-spacing:.05em;margin:2px 0 8px}
-.hidden-net{display:flex;align-items:center;gap:7px;padding:12px 0}
-.hidden-net span{width:34px;height:11px;border-radius:4px;background:repeating-linear-gradient(90deg,var(--bg3),var(--bg3) 4px,var(--bg2) 4px,var(--bg2) 8px)}
+.net-label{color:var(--muted);font-size:10px;letter-spacing:.12em;text-transform:uppercase;margin:2px 0 10px;font-family:var(--mono)}
+.spend-bar{height:8px;border-radius:5px;background:var(--bg3);overflow:hidden;margin:4px 0 10px}
+.spend-bar span{display:block;height:100%;border-radius:5px;transition:width .4s ease}
+.spend-foot{display:flex;justify-content:space-between;font-size:11.5px;color:var(--muted);letter-spacing:.04em}
+.hidden-net{display:flex;align-items:center;gap:7px;padding:10px 0}
+.hidden-net span{width:30px;height:10px;border-radius:3px;background:repeating-linear-gradient(90deg,var(--bg3),var(--bg3) 4px,var(--bg2) 4px,var(--bg2) 8px)}
 .hidden-label{color:var(--faint);font-size:12px;margin-left:8px}
-.spark{display:block;margin-top:6px}.spark-empty{color:var(--faint);font-size:12px;margin-top:8px}
+.spark{display:block;margin-top:8px}.spark-empty{color:var(--faint);font-size:12px;margin-top:8px}
+
+/* schedule reminder */
+.reminder{display:flex;align-items:center;gap:10px;width:100%;text-align:left;margin-top:12px;background:var(--bg3);border:1px solid var(--line);border-radius:9px;padding:10px 12px;cursor:pointer;color:var(--text);transition:.15s;font-family:var(--sans)}
+.reminder:hover{border-color:var(--line2)}
+.reminder.due{border-color:var(--accent);background:var(--accent-dim)}
+.reminder.done{opacity:.7}
+.rem-box{width:18px;height:18px;border-radius:5px;border:1.5px solid var(--line2);display:flex;align-items:center;justify-content:center;color:var(--accent);flex:none}
+.reminder.done .rem-box{background:var(--accent-dim);border-color:var(--accent)}
+.reminder.due .rem-box{border-color:var(--accent)}
+.rem-text{flex:1;font-size:13px}
+.reminder.done .rem-text{text-decoration:line-through;color:var(--muted)}
+.rem-tag{font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--faint);flex:none}
+.reminder.due .rem-tag{color:var(--accent)}
+
+/* habit cards */
+.habit-cards{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.hcard{text-align:left;background:var(--bg3);border:1px solid var(--line);border-radius:10px;padding:13px;cursor:pointer;transition:.15s;color:var(--text)}
+.hcard:hover{border-color:var(--line2)}
+.hcard.full{border-color:var(--accent);background:var(--accent-dim2)}
+.hc-top{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.hc-name{font-size:13px;font-weight:500}
+.hc-bar{height:4px;border-radius:3px;background:var(--line);margin:11px 0 8px;overflow:hidden}
+.hc-bar span{display:block;height:100%;background:var(--accent);border-radius:3px;transition:width .4s ease}
+.hc-frac{font-size:11px;color:var(--faint)}
+
+/* calendar */
+.cal-strip{display:grid;grid-template-columns:repeat(7,1fr);gap:6px}
+.cal-day{text-align:center;padding:9px 0;border-radius:8px;border:1px solid var(--line);background:var(--bg3)}
+.cal-day.on{border-color:var(--accent);background:var(--accent-dim)}
+.cal-dow{font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;color:var(--faint)}
+.cal-day.on .cal-dow{color:var(--accent)}
+.cal-num{font-size:15px;margin-top:3px}
+.cal-agenda{margin-top:12px;padding-top:12px;border-top:1px solid var(--line)}
+
+/* nutrition summary */
+.nut-big{font-size:34px;letter-spacing:-.02em;display:flex;align-items:baseline;gap:6px}
+.nut-unit{font-size:12px;color:var(--muted);letter-spacing:0}
+.nut-sub{font-size:12px;color:var(--muted);margin-top:2px}
+
+/* rows / lists */
 .list{display:flex;flex-direction:column;gap:2px}
 .row{display:flex;align-items:center;gap:10px;padding:9px 8px;border-radius:8px;transition:.12s}
 .row:hover{background:var(--bg3)}
 .row-title{flex:1;font-size:13.5px;line-height:1.4;min-width:0}
 .strike{color:var(--faint);text-decoration:line-through}
-.check{flex:none;width:20px;height:20px;border-radius:6px;border:1.5px solid var(--border2);background:none;color:transparent;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:.15s}
-.check:hover{border-color:var(--teal);color:var(--teal)}
-.check.on{border-color:var(--teal);background:var(--teal-dim);color:var(--teal)}
+.check{flex:none;width:20px;height:20px;border-radius:6px;border:1.5px solid var(--line2);background:none;color:transparent;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:.15s}
+.check:hover{border-color:var(--accent);color:var(--accent)}
+.check.on{border-color:var(--accent);background:var(--accent-dim);color:var(--accent)}
 .star{flex:none;background:none;border:none;color:var(--faint);cursor:pointer;display:flex;padding:2px}
 .star:hover{color:var(--gold)}.star.on{color:var(--gold)}.star.on svg{fill:var(--gold)}
-.pill{font-size:10.5px;font-weight:600;border:1px solid;border-radius:20px;padding:2px 9px;text-transform:capitalize;flex:none}
-.tag{font-size:11px;color:var(--muted);background:var(--bg3);padding:2px 9px;border-radius:6px;flex:none}
+.pill{font-size:10px;font-weight:500;border:1px solid;border-radius:20px;padding:2px 9px;text-transform:capitalize;flex:none;font-family:var(--mono);letter-spacing:.04em}
+.tag{font-size:10.5px;color:var(--muted);background:var(--bg3);padding:2px 9px;border-radius:6px;flex:none;font-family:var(--mono)}
 .dot-pri{width:7px;height:7px;border-radius:50%;flex:none}
 .icon-btn{background:none;border:none;color:var(--muted);cursor:pointer;display:flex;padding:5px;border-radius:6px;transition:.12s}
 .icon-btn:hover{color:var(--text);background:var(--bg3)}.icon-btn.faint{color:var(--faint)}
-.ghost-btn{display:flex;align-items:center;gap:6px;background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--sans);font-size:12px;font-weight:500;padding:6px 11px;border-radius:8px;cursor:pointer;transition:.15s}
-.ghost-btn:hover{border-color:var(--border2)}.ghost-btn:disabled{opacity:.6}.ghost-btn.rec{color:var(--accent);border-color:var(--accent)}
-.solid-btn{display:flex;align-items:center;gap:6px;background:var(--teal);color:#04222a;border:none;font-weight:600;font-family:var(--sans);font-size:13px;padding:9px 12px;border-radius:9px;cursor:pointer;flex:none;transition:.15s}
+.ghost-btn{display:flex;align-items:center;gap:6px;background:var(--bg3);border:1px solid var(--line);color:var(--text);font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;padding:6px 11px;border-radius:8px;cursor:pointer;transition:.15s}
+.ghost-btn:hover{border-color:var(--line2)}.ghost-btn:disabled{opacity:.6}.ghost-btn.rec{color:var(--accent);border-color:var(--accent)}
+.ghost-btn.sm{margin-left:auto;padding:4px 9px;font-size:10px}
+.solid-btn{display:flex;align-items:center;gap:6px;background:var(--accent);color:#04201c;border:none;font-weight:500;font-family:var(--mono);font-size:12px;letter-spacing:.05em;text-transform:uppercase;padding:9px 13px;border-radius:9px;cursor:pointer;flex:none;transition:.15s}
 .solid-btn.wide{padding:9px 16px}.solid-btn:hover{filter:brightness(1.06)}.solid-btn:disabled{opacity:.6}
-.ring-wrap{display:flex;gap:18px;align-items:center}.ring{flex:none}
-.ring-num{fill:var(--text);font-family:var(--mono);font-size:21px}
-.ring-sub{fill:var(--faint);font-size:9px;letter-spacing:.1em;text-transform:uppercase}
-.ring-legend{flex:1;display:flex;flex-direction:column;gap:6px}
-.legend-row{display:flex;align-items:center;gap:8px;font-size:12.5px}
-.leg-dot{width:7px;height:7px;border-radius:50%;background:var(--bg3);border:1px solid var(--border2);flex:none}
-.leg-dot.done{background:var(--teal);border-color:var(--teal)}
-.leg-name{flex:1;color:var(--muted)}.leg-frac{font-family:var(--mono);font-size:11px;color:var(--faint)}
-.advice p{margin:0 0 7px;font-size:13.5px;line-height:1.5;color:var(--text)}.advice p:last-child{margin:0}
+
+/* advice */
+.advice p{margin:0 0 7px;font-size:13.5px;line-height:1.55;color:var(--text)}.advice p:last-child{margin:0}
+
+/* goals */
+.goal-block{margin-bottom:16px}.goal-block:last-child{margin-bottom:0}
 .goals-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}
-.goal-scope{font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);margin-bottom:9px}
+.goal-scope{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--faint);margin-bottom:9px;font-family:var(--mono)}
 .goal{display:flex;align-items:center;gap:9px;font-size:13px;padding:6px 0;color:var(--muted);cursor:pointer}
 .goal.full{padding:8px 0}.goal:hover{color:var(--text)}
 .goal.done{color:var(--faint);text-decoration:line-through}
-.goal-box{width:17px;height:17px;border-radius:5px;border:1.5px solid var(--border2);display:flex;align-items:center;justify-content:center;color:var(--teal);flex:none}
-.goal.done .goal-box{background:var(--teal-dim);border-color:var(--teal)}
+.goal-box{width:17px;height:17px;border-radius:5px;border:1.5px solid var(--line2);display:flex;align-items:center;justify-content:center;color:var(--accent);flex:none}
+.goal.done .goal-box{background:var(--accent-dim);border-color:var(--accent)}
+
+/* chips */
 .chips{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:14px}
-.chip{background:var(--bg2);border:1px solid var(--border);color:var(--muted);font-family:var(--sans);font-size:12px;padding:6px 12px;border-radius:20px;cursor:pointer;transition:.15s}
+.chip{background:var(--bg2);border:1px solid var(--line);color:var(--muted);font-family:var(--mono);font-size:11px;letter-spacing:.04em;padding:6px 12px;border-radius:20px;cursor:pointer;transition:.15s}
 .chip:hover{color:var(--text)}.chip.on{background:var(--accent-dim);border-color:var(--accent);color:var(--text)}
 .scope-toggle{display:flex;gap:5px}
+
+/* brain */
 .brain-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
-.brain-tile{position:relative;text-align:left;background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:18px 16px;cursor:pointer;transition:.15s;color:var(--text)}
-.brain-tile:hover{border-color:var(--border2);transform:translateY(-2px)}
-.tile-name{font-family:var(--disp);font-weight:600;font-size:15px}
-.tile-meta{color:var(--faint);font-size:11.5px;margin-top:6px;font-family:var(--mono)}
+.brain-tile{position:relative;text-align:left;background:var(--bg2);border:1px solid var(--line);border-radius:12px;padding:18px 16px;cursor:pointer;transition:.15s;color:var(--text)}
+.brain-tile:hover{border-color:var(--accent);transform:translateY(-2px)}
+.tile-name{font-family:var(--serif);font-weight:500;font-size:17px}
+.tile-meta{color:var(--faint);font-size:11px;margin-top:6px;font-family:var(--mono);letter-spacing:.04em}
 .tile-arrow{position:absolute;top:18px;right:14px;color:var(--faint)}
-.back{display:flex;align-items:center;gap:5px;background:none;border:none;color:var(--muted);cursor:pointer;font-family:var(--sans);font-size:12.5px;margin-bottom:12px;padding:4px 0}
+.back{display:flex;align-items:center;gap:5px;background:none;border:none;color:var(--muted);cursor:pointer;font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:12px;padding:4px 0}
 .back:hover{color:var(--text)}
 .note-add{display:flex;gap:8px;align-items:center}
-.inp{flex:1;background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:9px 12px;color:var(--text);font-family:var(--sans);font-size:13px;outline:none}
-.inp:focus{border-color:var(--teal)}.inp::placeholder{color:var(--faint)}
+.inp{flex:1;background:var(--bg3);border:1px solid var(--line);border-radius:8px;padding:9px 12px;color:var(--text);font-family:var(--sans);font-size:13px;outline:none}
+.inp:focus{border-color:var(--accent)}.inp::placeholder{color:var(--faint)}
 .row.note{background:var(--bg3);margin-top:4px}
+
+/* habits page */
 .habit-stack{display:flex;flex-direction:column;gap:12px}
-.habit.full{border-color:var(--teal)}
+.habit.full{border-color:var(--accent)}
 .sub-list{display:flex;flex-wrap:wrap;gap:8px}
-.subtask{display:flex;align-items:center;gap:8px;background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:8px 12px;color:var(--muted);font-family:var(--sans);font-size:13px;cursor:pointer;transition:.15s}
-.subtask:hover{color:var(--text);border-color:var(--border2)}
-.subtask.on{color:var(--text);border-color:var(--teal)}
-.sbox{width:16px;height:16px;border-radius:5px;border:1.5px solid var(--border2);display:flex;align-items:center;justify-content:center;color:var(--teal);flex:none}
-.subtask.on .sbox{background:var(--teal-dim);border-color:var(--teal)}
+.subtask{display:flex;align-items:center;gap:8px;background:var(--bg3);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--muted);font-family:var(--sans);font-size:13px;cursor:pointer;transition:.15s}
+.subtask:hover{color:var(--text);border-color:var(--line2)}
+.subtask.on{color:var(--text);border-color:var(--accent)}
+.sbox{width:16px;height:16px;border-radius:5px;border:1.5px solid var(--line2);display:flex;align-items:center;justify-content:center;color:var(--accent);flex:none}
+.subtask.on .sbox{background:var(--accent-dim);border-color:var(--accent)}
+
+/* nutrition page */
 .macro-row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
-.macro{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:16px;text-align:center}
-.macro-num{font-size:26px;letter-spacing:-.02em}
-.macro-lab{color:var(--faint);font-size:11px;letter-spacing:.05em;margin-top:4px}
-.row.meal{background:var(--bg2);border:1px solid var(--border);margin-bottom:6px;border-radius:9px}
+.macro{background:var(--bg2);border:1px solid var(--line);border-radius:12px;padding:16px;text-align:center}
+.macro-num{font-size:26px;letter-spacing:-.02em;font-family:var(--mono)}
+.macro-lab{color:var(--faint);font-size:10px;letter-spacing:.1em;text-transform:uppercase;margin-top:4px;font-family:var(--mono)}
+.row.meal{background:var(--bg2);border:1px solid var(--line);margin-bottom:6px;border-radius:9px}
 .meal-time{font-size:11px;color:var(--faint);flex:none;width:54px}
 .meal-mac{font-size:11.5px;color:var(--muted);flex:none}
-.ta{width:100%;min-height:120px;background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:13px;color:var(--text);font-family:var(--sans);font-size:13.5px;line-height:1.55;outline:none;resize:vertical}
-.ta:focus{border-color:var(--teal)}.ta::placeholder{color:var(--faint)}
+
+/* journal */
+.ta{width:100%;min-height:120px;background:var(--bg3);border:1px solid var(--line);border-radius:10px;padding:13px;color:var(--text);font-family:var(--sans);font-size:13.5px;line-height:1.55;outline:none;resize:vertical}
+.ta:focus{border-color:var(--accent)}.ta::placeholder{color:var(--faint)}
 .j-actions{display:flex;gap:9px;margin-top:11px;justify-content:flex-end}
-.j-row{padding:13px 0;border-bottom:1px solid var(--border)}.j-row:last-child{border:none}
+.j-row{padding:13px 0;border-bottom:1px solid var(--line)}.j-row:last-child{border:none}
 .j-top{display:flex;align-items:center;gap:11px;margin-bottom:6px}
 .j-date{font-size:11px;color:var(--faint)}
-.link-btn{background:none;border:none;color:var(--teal);font-family:var(--sans);font-size:11.5px;cursor:pointer;padding:0}
+.link-btn{background:none;border:none;color:var(--accent);font-family:var(--mono);font-size:11px;cursor:pointer;padding:0;letter-spacing:.04em}
 .j-sum{font-size:13.5px;line-height:1.5}
 .j-raw{margin-top:9px;padding:11px;background:var(--bg3);border-radius:8px;font-size:13px;line-height:1.6;color:var(--muted);white-space:pre-wrap}
-.toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:var(--bg3);border:1px solid var(--border2);color:var(--text);padding:11px 18px;border-radius:10px;font-size:13px;box-shadow:0 8px 30px rgba(0,0,0,.5);z-index:50}
+
+/* ring (kept for compatibility) */
+.ring-num{fill:var(--text);font-family:var(--mono);font-size:21px}
+.ring-sub{fill:var(--faint);font-size:9px;letter-spacing:.1em;text-transform:uppercase}
+
+/* toast */
+.toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:var(--bg3);border:1px solid var(--line2);color:var(--text);padding:11px 18px;border-radius:10px;font-size:13px;box-shadow:0 8px 30px rgba(0,0,0,.5);z-index:50}
+
+@media(max-width:1080px){ .cols{grid-template-columns:1fr} }
 @media(max-width:760px){
-  .os-sidebar{width:58px;padding:16px 8px}
-  .os-navlabel,.brand-name{display:none}
-  .grid,.goals-grid,.brain-grid,.macro-row{grid-template-columns:1fr}
-  .span2{grid-column:auto}
-  .capture-bar{padding:12px 14px}.view-head,.view-body{padding-left:14px;padding-right:14px}
-  .cap-btn span{display:none}
+  .topbar{gap:12px;padding:0 12px}
+  .os-main{padding:14px 12px 40px}
+  .goals-grid,.brain-grid,.macro-row,.habit-cards{grid-template-columns:1fr}
+  .greeting{font-size:25px}
 }
 `}</style>
   );

@@ -135,3 +135,32 @@ from (values
 ) as v(habit, name, position)
 join habits h on h.name = v.habit
 where not exists (select 1 from habit_subtasks);
+
+-- ------------------------------------------------------------
+-- Spend tracking and integrations (spend + Teams calendar update)
+-- ------------------------------------------------------------
+create table if not exists app_settings (
+  key   text primary key,
+  value text
+);
+insert into app_settings (key, value) values ('spend_limit', '4928')
+  on conflict (key) do nothing;
+
+create table if not exists monthly_spend (
+  month text primary key,   -- 'YYYY-MM'
+  spent numeric not null default 0
+);
+
+create table if not exists integrations (
+  provider     text primary key,   -- 'microsoft'
+  refresh_token text,
+  updated_at   timestamptz not null default now()
+);
+
+-- Plain weekly schedule (manual entries)
+create table if not exists schedule (
+  id         uuid primary key default gen_random_uuid(),
+  body       text not null,
+  position   int not null default 0,
+  created_at timestamptz not null default now()
+);

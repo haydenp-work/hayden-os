@@ -61,25 +61,36 @@ export async function POST(req) {
         await supabase.from("brain_notes").delete().eq("id", payload.id);
         break;
 
-      case "account.add": {
+      case "spend.set": {
+        const month = new Date().toISOString().slice(0, 7);
+        await supabase
+          .from("monthly_spend")
+          .upsert({ month, spent: Number(payload.amount) || 0 });
+        break;
+      }
+      case "spend.limit": {
+        await supabase
+          .from("app_settings")
+          .upsert({ key: "spend_limit", value: String(Number(payload.amount) || 0) });
+        break;
+      }
+
+      case "schedule.add": {
         const { data } = await supabase
-          .from("finance_accounts")
-          .insert({ name: payload.name, value: Number(payload.value) || 0 })
+          .from("schedule")
+          .insert({ body: payload.body, position: Number(payload.position) || 0 })
           .select()
           .single();
         return NextResponse.json({ id: data.id });
       }
-      case "account.delete":
-        await supabase.from("finance_accounts").delete().eq("id", payload.id);
+      case "schedule.delete":
+        await supabase.from("schedule").delete().eq("id", payload.id);
         break;
-
-      case "finance.snapshot": {
-        const { data: accts } = await supabase.from("finance_accounts").select("value");
-        const net = (accts || []).reduce((a, b) => a + Number(b.value), 0);
-        await supabase.from("finance_history").delete().eq("day", today());
-        await supabase.from("finance_history").insert({ day: today(), value: net });
+      case "schedule.uploaded":
+        await supabase
+          .from("app_settings")
+          .upsert({ key: "sched_uploaded_week", value: String(payload.week || "") });
         break;
-      }
 
       default:
         return NextResponse.json({ error: "unknown action" }, { status: 400 });
