@@ -12,23 +12,41 @@ export async function GET() {
   const sundayIso = addDaysISO(mondayIso, 6);
   const wday = weekdayET();
 
-  // Materialize recurring reminders due today, once per day, no duplicates.
+  // Materialize recurring reminders due today. Once per day, no duplicates, deletions respected.
+  // We track what has already been placed today in app_settings (no schema change needed).
   let recurring = [];
   try {
     const { data: rules } = await supabase.from("recurring_tasks").select("*").order("created_at");
     recurring = rules || [];
   } catch (e) { recurring = []; }
   try {
-    const due = recurring.filter((r) => r.weekday === wday && (!r.last_run || String(r.last_run) < today));
-    if (due.length) {
-      const { data: existing } = await supabase.from("daily_tasks").select("title").eq("day", today);
-      const have = new Set((existing || []).map((t) => t.title));
-      for (const r of due) {
-        if (!have.has(r.title)) { await supabase.from("daily_tasks").insert({ title: r.title, day: today }); have.add(r.title); }
-        await supabase.from("recurring_tasks").update({ last_run: today }).eq("id", r.id);
+    const ledgerKey = `recur_placed:${today}`;
+    let placed = [];
+    try {
+      const { data: led } = await supabase.from("app_settings").select("value").eq("key", ledgerKey).single();
+      if (led && led.value) placed = JSON.parse(led.value);
+    } catch (e) { placed = []; }
+    if (!Array.isArray(placed)) placed = [];
+
+    const dueToday = recurring.filter((r) => r.weekday === wday);
+    const { data: todayRows } = await supabase.from("daily_tasks").select("id, title").eq("day", today);
+    const rows = todayRows || [];
+    let changed = false;
+
+    for (const r of dueToday) {
+      const copies = rows.filter((t) => t.title === r.title);
+      // Heal duplicates left over from the older bug: keep one, remove the rest.
+      if (copies.length > 1) {
+        for (const extra of copies.slice(1)) await supabase.from("daily_tasks").delete().eq("id", extra.id);
+      }
+      if (!placed.includes(r.id)) {
+        if (copies.length === 0) { await supabase.from("daily_tasks").insert({ title: r.title, day: today }); rows.push({ id: "x", title: r.title }); }
+        placed.push(r.id);
+        changed = true;
       }
     }
-  } catch (e) { /* best effort */ }
+    if (changed) await supabase.from("app_settings").upsert({ key: ledgerKey, value: JSON.stringify(placed) });
+  } catch (e) { /* best effort, never block the dashboard */ }
 
   const [profile, events, wtasks, dtasks, goals, meals, journal, settings, spend] = await Promise.all([
     supabase.from("profile").select("*").eq("id", 1).single(),
