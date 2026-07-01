@@ -123,7 +123,7 @@ export default function Dashboard() {
   }
 
   /* ---------- daily tasks ---------- */
-  async function addDaily(v) { const t = (v ?? dtaskInput).trim(); if (!t) return; const r = await mutate("dtask.add", { title: t }); patch((p) => { p.dailyTasks.push({ id: r.id || uid(), title: t, done: false }); }); setDtaskInput(""); }
+  async function addDaily(v) { const t = (v ?? dtaskInput).trim(); if (!t) return; const r = await mutate("dtask.add", { title: t }); if (r && r.error) { flash("Could not save: " + r.error); return; } patch((p) => { p.dailyTasks.push({ id: r.id || uid(), title: t, done: false }); }); setDtaskInput(""); }
   function toggleDaily(id, done) { patch((p) => { const x = p.dailyTasks.find((t) => t.id === id); if (x) x.done = done; }); mutate("dtask.toggle", { id, done }); }
   function delDaily(id) { patch((p) => { p.dailyTasks = p.dailyTasks.filter((t) => t.id !== id); }); mutate("dtask.delete", { id }); }
   function delRecurring(id) { patch((p) => { p.recurring = (p.recurring || []).filter((r) => r.id !== id); }); mutate("recurring.delete", { id }); }

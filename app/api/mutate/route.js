@@ -41,7 +41,8 @@ export async function POST(req) {
       // ---------- daily tasks ----------
       case "dtask.add": {
         const day = payload.day || new Date().toISOString().slice(0, 10);
-        const { data } = await supabase.from("daily_tasks").insert({ title: payload.title, day }).select().single();
+        const { data, error } = await supabase.from("daily_tasks").insert({ title: payload.title, day }).select().single();
+        if (error) return NextResponse.json({ error: error.message }, { status: 500 });
         return NextResponse.json({ id: data.id });
       }
       case "dtask.toggle":
