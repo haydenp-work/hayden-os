@@ -138,6 +138,9 @@ export default function Dashboard() {
       (c.goals || []).forEach((x) => { if (!p.goals.some((d) => d.id === x.id)) p.goals.unshift({ id: x.id, text: x.body, scope: x.scope, done: !!x.done }); });
       (c.events || []).forEach((x) => { if (!p.events.some((d) => d.id === x.id)) p.events.push({ id: x.id, day: x.day, startMin: x.start_min, endMin: x.end_min, title: x.title }); });
       (c.recurring || []).forEach((x) => { if (!p.recurring) p.recurring = []; if (!p.recurring.some((d) => d.id === x.id)) p.recurring.push({ id: x.id, title: x.title, weekday: x.weekday }); });
+      (c.meals || []).forEach((x) => { if (!p.meals.some((d) => d.id === x.id)) { p.meals.unshift({ id: x.id, name: x.name, calories: x.calories, protein: x.protein, time: "now" }); p.nutrition.calories += x.calories || 0; p.nutrition.protein += x.protein || 0; } });
+      if (typeof r.spendSet === "number") p.spend.spent = r.spendSet;
+      if (typeof r.proteinGoalSet === "number") p.nutrition.proteinGoal = r.proteinGoalSet;
       const comp = r.completed || {};
       (comp.daily || []).forEach((id) => { const tt = p.dailyTasks.find((d) => d.id === id); if (tt) tt.done = true; });
       (comp.weekly || []).forEach((id) => { const tt = p.weeklyTasks.find((d) => d.id === id); if (tt) tt.done = true; });
@@ -254,7 +257,7 @@ export default function Dashboard() {
         <div className="panel mk-panel">
           <div className="plabel"><Sparkles size={13} /> MASTER KEY <span className="pcount mono">command + advice</span></div>
           <div className="mk-row">
-            <textarea className="mk-input" rows={2} placeholder="Ask for advice, or tell me what to do. Add a task, put Duke visit Thursday at 2, remind me every Friday to send my schedule..." value={mkText} onChange={(e) => setMkText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); runMaster(); } }} />
+            <textarea className="mk-input" rows={2} placeholder="Tell me anything. Add a task, put Duke visit Thursday at 2, log a chicken bowl, add 40g protein, add $60 to spend, or ask for advice..." value={mkText} onChange={(e) => setMkText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); runMaster(); } }} />
             <div className="mk-actions">
               <button className={mkVoice === "listening" ? "cap-mic rec" : "cap-mic"} onClick={mkMic} title="Voice"><Mic size={16} /></button>
               <button className="cap-go" onClick={runMaster} disabled={mkLoading}>{mkLoading ? <Loader2 size={14} className="spin" /> : <>Run <ChevronRight size={13} /></>}</button>
