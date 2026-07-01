@@ -33,3 +33,12 @@ insert into app_settings (key, value) values ('protein_goal', '200') on conflict
 create table if not exists monthly_spend (month text primary key, spent numeric not null default 0);
 
 -- goals, meals, journal, profile are unchanged and reused
+
+-- Recurring daily reminders (e.g. every Thursday)
+create table if not exists recurring_tasks (
+  id         uuid primary key default gen_random_uuid(),
+  title      text not null,
+  weekday    int not null,          -- 0=Sunday ... 6=Saturday (JS getDay)
+  last_run   date,                  -- last date it was materialized into daily_tasks
+  created_at timestamptz not null default now()
+);

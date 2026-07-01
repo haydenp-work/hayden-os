@@ -70,6 +70,14 @@ export async function POST(req) {
       case "spend.limit":
         await supabase.from("app_settings").upsert({ key: "spend_limit", value: String(Number(payload.amount) || 0) });
         break;
+      case "recurring.add": {
+        const { data } = await supabase.from("recurring_tasks").insert({ title: payload.title, weekday: Number(payload.weekday) }).select().single();
+        return NextResponse.json({ id: data.id });
+      }
+      case "recurring.delete":
+        await supabase.from("recurring_tasks").delete().eq("id", payload.id);
+        break;
+
       case "protein.goal":
         await supabase.from("app_settings").upsert({ key: "protein_goal", value: String(Number(payload.grams) || 200) });
         break;

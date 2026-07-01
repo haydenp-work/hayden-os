@@ -20,6 +20,19 @@ export async function GET() {
   const monday = mondayOf(now);
   const sunday = new Date(monday); sunday.setDate(monday.getDate() + 6);
 
+  // Materialize any recurring reminders due today (once per day).
+  let recurring = [];
+  try {
+    const { data: rules } = await supabase.from("recurring_tasks").select("*").order("created_at");
+    recurring = rules || [];
+    for (const r of recurring) {
+      if (r.weekday === now.getDay() && (!r.last_run || r.last_run < today)) {
+        await supabase.from("daily_tasks").insert({ title: r.title, day: today });
+        await supabase.from("recurring_tasks").update({ last_run: today }).eq("id", r.id);
+      }
+    }
+  } catch (e) { recurring = []; }
+
   const [profile, events, wtasks, dtasks, goals, meals, journal, settings, spend] = await Promise.all([
     supabase.from("profile").select("*").eq("id", 1).single(),
     supabase.from("events").select("*").gte("day", iso(monday)).lte("day", iso(sunday)).order("start_min"),
@@ -46,6 +59,7 @@ export async function GET() {
     events: (events.data || []).map((e) => ({ id: e.id, day: e.day, startMin: e.start_min, endMin: e.end_min, title: e.title })),
     weeklyTasks: (wtasks.data || []).map((t) => ({ id: t.id, title: t.title, done: t.done, pinned: t.pinned })),
     dailyTasks: (dtasks.data || []).map((t) => ({ id: t.id, title: t.title, done: t.done })),
+    recurring: recurring.map((r) => ({ id: r.id, title: r.title, weekday: r.weekday })),
     goals: (goals.data || []).map((g) => ({ id: g.id, text: g.body, scope: g.scope, done: g.done })),
     meals: mealsToday.map((m) => ({
       id: m.id, name: m.name, calories: m.calories, protein: m.protein,

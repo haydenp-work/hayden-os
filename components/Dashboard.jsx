@@ -126,6 +126,7 @@ export default function Dashboard() {
   async function addDaily(v) { const t = (v ?? dtaskInput).trim(); if (!t) return; const r = await mutate("dtask.add", { title: t }); patch((p) => { p.dailyTasks.push({ id: r.id || uid(), title: t, done: false }); }); setDtaskInput(""); }
   function toggleDaily(id, done) { patch((p) => { const x = p.dailyTasks.find((t) => t.id === id); if (x) x.done = done; }); mutate("dtask.toggle", { id, done }); }
   function delDaily(id) { patch((p) => { p.dailyTasks = p.dailyTasks.filter((t) => t.id !== id); }); mutate("dtask.delete", { id }); }
+  function delRecurring(id) { patch((p) => { p.recurring = (p.recurring || []).filter((r) => r.id !== id); }); mutate("recurring.delete", { id }); }
 
   /* ---------- weekly tasks ---------- */
   async function addWeekly() { const t = wtaskInput.trim(); if (!t) return; const r = await mutate("wtask.add", { title: t }); patch((p) => { p.weeklyTasks.push({ id: r.id || uid(), title: t, done: false, pinned: false }); }); setWtaskInput(""); }
@@ -214,7 +215,7 @@ export default function Dashboard() {
         <div className="panel mk-panel">
           <div className="plabel"><Sparkles size={13} /> MASTER KEY <span className="pcount mono">command + advice</span></div>
           <div className="mk-row">
-            <textarea className="mk-input" rows={2} placeholder="Ask for advice, or tell me what to do. Add a task, move it, put Duke visit Thursday at 2, plan around my week..." value={mkText} onChange={(e) => setMkText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) runMaster(); }} />
+            <textarea className="mk-input" rows={2} placeholder="Ask for advice, or tell me what to do. Add a task, put Duke visit Thursday at 2, remind me every Friday to send my schedule..." value={mkText} onChange={(e) => setMkText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); runMaster(); } }} />
             <div className="mk-actions">
               <button className={mkVoice === "listening" ? "cap-mic rec" : "cap-mic"} onClick={mkMic} title="Voice"><Mic size={16} /></button>
               <button className="cap-go" onClick={runMaster} disabled={mkLoading}>{mkLoading ? <Loader2 size={14} className="spin" /> : <>Run <ChevronRight size={13} /></>}</button>
@@ -250,6 +251,18 @@ export default function Dashboard() {
               <input className="cap-inp" placeholder="Add a task for today" value={dtaskInput} onChange={(e) => setDtaskInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addDaily(); }} />
               <button className="cap-go" onClick={() => addDaily()}><Plus size={15} /></button>
             </div>
+            {(os.recurring || []).length > 0 && (
+              <div className="repeating">
+                <div className="rep-label">Repeating</div>
+                {os.recurring.map((r) => (
+                  <div key={r.id} className="rep-row">
+                    <span className="rep-day mono">{["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][r.weekday]}</span>
+                    <span className="rep-title">{r.title}</span>
+                    <button className="icon-btn faint" onClick={() => delRecurring(r.id)}><X size={12} /></button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           <div className="stack">
@@ -724,6 +737,14 @@ function Style() {
 .jdate{font-size:10px;letter-spacing:.1em;color:var(--accent);margin-bottom:5px}
 .jsum{font-size:13px;color:var(--muted);font-style:italic;margin-bottom:6px;line-height:1.5}
 .jbody{font-size:13px;line-height:1.55;color:var(--text);white-space:pre-wrap}
+
+/* repeating reminders */
+.repeating{margin-top:12px;padding-top:10px;border-top:1px solid var(--line)}
+.rep-label{font-family:var(--mono);font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);margin-bottom:6px}
+.rep-row{display:flex;align-items:center;gap:9px;padding:5px 4px;border-radius:7px}
+.rep-row:hover{background:var(--bg3)}
+.rep-day{font-size:10px;color:var(--gold);flex:none;width:30px;letter-spacing:.06em}
+.rep-title{flex:1;font-size:12.5px;color:var(--muted);min-width:0}
 
 /* toast */
 .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--bg3);border:1px solid var(--accent);color:var(--text);padding:10px 18px;border-radius:9px;font-size:13px;z-index:50;box-shadow:0 8px 30px rgba(0,0,0,.5)}
