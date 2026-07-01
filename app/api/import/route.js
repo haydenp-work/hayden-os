@@ -1,11 +1,11 @@
 import { NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { askClaudeImage, parseJson } from "@/lib/claude";
+import { todayET, monthET, mondayISO_ET, addDaysISO } from "@/lib/tz";
 
 export const runtime = "nodejs";
 
-const iso = (d) => d.toISOString().slice(0, 10);
-const thisMonth = () => new Date().toISOString().slice(0, 7);
+const thisMonth = () => monthET();
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 const WD = { sunday: 0, monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6 };
 
@@ -42,15 +42,15 @@ export async function POST(req) {
         image, mt, { maxTokens: 900 }
       );
       const j = parseJson(out);
-      const monday = mondayOf(new Date());
+      const mondayIso = mondayISO_ET();
       const rows = [];
       for (const e of (j.events || [])) {
         const wd = WD[String(e.weekday || "").toLowerCase()];
         if (wd == null || !e.title) continue;
-        const d = new Date(monday); d.setDate(monday.getDate() + ((wd + 6) % 7));
+        const dayIso = addDaysISO(mondayIso, (wd + 6) % 7);
         const s = hhmmToMin(e.start) ?? 540;
         const en = hhmmToMin(e.end) ?? s + 60;
-        rows.push({ title: String(e.title).slice(0, 80), day: iso(d), start_min: s, end_min: en });
+        rows.push({ title: String(e.title).slice(0, 80), day: dayIso, start_min: s, end_min: en });
       }
       let inserted = [];
       if (rows.length) {

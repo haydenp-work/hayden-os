@@ -1,15 +1,15 @@
 import { NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { askClaude, parseJson } from "@/lib/claude";
+import { todayET } from "@/lib/tz";
 
 export const runtime = "nodejs";
 
-const iso = (d) => d.toISOString().slice(0, 10);
+
 
 export async function POST() {
-  const now = new Date();
-  const today = iso(now);
-  const weekday = now.toLocaleDateString([], { weekday: "long" });
+  const today = todayET();
+  const weekday = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", weekday: "long" }).format(new Date());
 
   const [ev, wt, gl, dt, jr] = await Promise.all([
     supabase.from("events").select("title, start_min, end_min").eq("day", today).order("start_min"),

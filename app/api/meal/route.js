@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { askClaude, parseJson } from "@/lib/claude";
+import { todayET } from "@/lib/tz";
 
 export const runtime = "nodejs";
 
@@ -23,7 +24,7 @@ export async function POST(req) {
     // keep zeros, still log the meal
   }
 
-  const { data, error } = await supabase.from("meals").insert(m).select().single();
+  const { data, error } = await supabase.from("meals").insert({ ...m, day: todayET() }).select().single();
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
   return NextResponse.json({

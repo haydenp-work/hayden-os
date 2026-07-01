@@ -141,6 +141,7 @@ export default function Dashboard() {
       (c.meals || []).forEach((x) => { if (!p.meals.some((d) => d.id === x.id)) { p.meals.unshift({ id: x.id, name: x.name, calories: x.calories, protein: x.protein, time: "now" }); p.nutrition.calories += x.calories || 0; p.nutrition.protein += x.protein || 0; } });
       if (typeof r.spendSet === "number") p.spend.spent = r.spendSet;
       if (typeof r.proteinGoalSet === "number") p.nutrition.proteinGoal = r.proteinGoalSet;
+      if (r.nutritionReset) { p.meals = []; p.nutrition.calories = 0; p.nutrition.protein = 0; }
       const comp = r.completed || {};
       (comp.daily || []).forEach((id) => { const tt = p.dailyTasks.find((d) => d.id === id); if (tt) tt.done = true; });
       (comp.weekly || []).forEach((id) => { const tt = p.weeklyTasks.find((d) => d.id === id); if (tt) tt.done = true; });
@@ -196,6 +197,20 @@ export default function Dashboard() {
     const r = await post("/api/meal", { text: t });
     if (r.meal) patch((p) => { p.meals.unshift(r.meal); p.nutrition.calories += r.meal.calories || 0; p.nutrition.protein += r.meal.protein || 0; });
     setMealText(""); setMealLoading(false);
+  }
+
+  function delMeal(id) {
+    patch((p) => {
+      const m = p.meals.find((x) => x.id === id);
+      if (m) { p.nutrition.calories = Math.max(0, p.nutrition.calories - (m.calories || 0)); p.nutrition.protein = Math.max(0, p.nutrition.protein - (m.protein || 0)); }
+      p.meals = p.meals.filter((x) => x.id !== id);
+    });
+    mutate("meal.delete", { id });
+  }
+  function resetNutrition() {
+    patch((p) => { p.meals = []; p.nutrition.calories = 0; p.nutrition.protein = 0; });
+    mutate("nutrition.reset", {});
+    flash("Today's nutrition cleared.");
   }
 
   /* ---------- journal ---------- */
@@ -444,7 +459,9 @@ export default function Dashboard() {
         </div>
 
         <div className="panel" style={{ marginTop: 14 }}>
-          <div className="plabel"><Plus size={13} /> LOG A MEAL <span className="pcount mono">claude estimates macros</span></div>
+          <div className="plabel"><Plus size={13} /> LOG A MEAL <span className="pcount mono">claude estimates macros</span>
+            {os.meals.length > 0 && <button className="ghost-btn" onClick={resetNutrition}><Trash2 size={12} /> Reset today</button>}
+          </div>
           <div className="cap">
             <input className="cap-inp" placeholder="e.g. grilled chicken bowl with rice and beans" value={mealText} onChange={(e) => setMealText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addMeal(); }} />
             <button className="cap-go" onClick={addMeal} disabled={mealLoading}>{mealLoading ? <Loader2 size={14} className="spin" /> : <Plus size={15} />}</button>
@@ -455,6 +472,7 @@ export default function Dashboard() {
                 <span className="row-title">{m.name}</span>
                 <span className="mono meal-macro">{m.protein}g P</span>
                 <span className="mono meal-macro faint">{m.calories} kcal</span>
+                <button className="icon-btn faint" onClick={() => delMeal(m.id)}><X size={13} /></button>
               </div>
             ))}
             {os.meals.length === 0 && <div className="empty">No meals logged today.</div>}

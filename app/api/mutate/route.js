@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
+import { todayET, monthET } from "@/lib/tz";
 
 export const runtime = "nodejs";
 
-const thisMonth = () => new Date().toISOString().slice(0, 7);
+const thisMonth = () => monthET();
 
 export async function POST(req) {
   const { action, payload = {} } = await req.json().catch(() => ({}));
@@ -40,7 +41,7 @@ export async function POST(req) {
 
       // ---------- daily tasks ----------
       case "dtask.add": {
-        const day = payload.day || new Date().toISOString().slice(0, 10);
+        const day = payload.day || todayET();
         const { data, error } = await supabase.from("daily_tasks").insert({ title: payload.title, day }).select().single();
         if (error) return NextResponse.json({ error: error.message }, { status: 500 });
         return NextResponse.json({ id: data.id });
@@ -81,6 +82,12 @@ export async function POST(req) {
 
       case "protein.goal":
         await supabase.from("app_settings").upsert({ key: "protein_goal", value: String(Number(payload.grams) || 200) });
+        break;
+      case "meal.delete":
+        await supabase.from("meals").delete().eq("id", payload.id);
+        break;
+      case "nutrition.reset":
+        await supabase.from("meals").delete().eq("day", todayET());
         break;
 
       default:

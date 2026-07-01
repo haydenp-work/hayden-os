@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
+import { todayET } from "@/lib/tz";
 import { askClaude } from "@/lib/claude";
 
 export const runtime = "nodejs";
@@ -24,7 +25,7 @@ export async function POST(req) {
 
   const { data, error } = await supabase
     .from("journal")
-    .insert({ body: text.trim(), summary })
+    .insert({ body: text.trim(), summary, day: todayET() })
     .select()
     .single();
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });

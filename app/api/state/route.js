@@ -1,51 +1,40 @@
 import { NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
+import { todayET, monthET, weekdayET, mondayISO_ET, addDaysISO } from "@/lib/tz";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function mondayOf(d) {
-  const x = new Date(d);
-  const off = (x.getDay() + 6) % 7;
-  x.setDate(x.getDate() - off);
-  x.setHours(0, 0, 0, 0);
-  return x;
-}
-const iso = (d) => d.toISOString().slice(0, 10);
-
 export async function GET() {
-  const now = new Date();
-  const today = iso(now);
-  const month = today.slice(0, 7);
-  const monday = mondayOf(now);
-  const sunday = new Date(monday); sunday.setDate(monday.getDate() + 6);
+  const today = todayET();
+  const month = monthET();
+  const mondayIso = mondayISO_ET();
+  const sundayIso = addDaysISO(mondayIso, 6);
+  const wday = weekdayET();
 
-  // Materialize any recurring reminders due today, once per day, without duplicates.
+  // Materialize recurring reminders due today, once per day, no duplicates.
   let recurring = [];
   try {
     const { data: rules } = await supabase.from("recurring_tasks").select("*").order("created_at");
     recurring = rules || [];
   } catch (e) { recurring = []; }
   try {
-    const due = recurring.filter((r) => r.weekday === now.getDay() && (!r.last_run || String(r.last_run) < today));
+    const due = recurring.filter((r) => r.weekday === wday && (!r.last_run || String(r.last_run) < today));
     if (due.length) {
       const { data: existing } = await supabase.from("daily_tasks").select("title").eq("day", today);
       const have = new Set((existing || []).map((t) => t.title));
       for (const r of due) {
-        if (!have.has(r.title)) {
-          await supabase.from("daily_tasks").insert({ title: r.title, day: today });
-          have.add(r.title);
-        }
+        if (!have.has(r.title)) { await supabase.from("daily_tasks").insert({ title: r.title, day: today }); have.add(r.title); }
         await supabase.from("recurring_tasks").update({ last_run: today }).eq("id", r.id);
       }
     }
-  } catch (e) { /* materialization is best effort; never block the dashboard */ }
+  } catch (e) { /* best effort */ }
 
   const [profile, events, wtasks, dtasks, goals, meals, journal, settings, spend] = await Promise.all([
     supabase.from("profile").select("*").eq("id", 1).single(),
-    supabase.from("events").select("*").gte("day", iso(monday)).lte("day", iso(sunday)).order("start_min"),
+    supabase.from("events").select("*").gte("day", mondayIso).lte("day", sundayIso).order("start_min"),
     supabase.from("weekly_tasks").select("*").order("created_at"),
-    supabase.from("daily_tasks").select("*").gte("day", iso(monday)).lte("day", iso(sunday)).order("created_at"),
+    supabase.from("daily_tasks").select("*").gte("day", mondayIso).lte("day", sundayIso).order("created_at"),
     supabase.from("goals").select("*").order("created_at", { ascending: false }),
     supabase.from("meals").select("*").eq("day", today).order("eaten_at", { ascending: false }),
     supabase.from("journal").select("*").order("created_at", { ascending: false }).limit(60),
@@ -63,12 +52,11 @@ export async function GET() {
 
   return NextResponse.json({
     profile: profile.data || { name: "Hayden", role: "", org: "" },
-    week: iso(monday),
+    week: mondayIso,
     todayIso: today,
     events: (events.data || []).map((e) => ({ id: e.id, day: e.day, startMin: e.start_min, endMin: e.end_min, title: e.title })),
     weeklyTasks: (wtasks.data || []).map((t) => ({ id: t.id, title: t.title, done: t.done, pinned: t.pinned })),
     dailyTasks: (dtasks.data || []).map((t) => ({ id: t.id, title: t.title, done: t.done, day: t.day })),
-    recurring: recurring.map((r) => ({ id: r.id, title: r.title, weekday: r.weekday })),
     goals: (goals.data || []).map((g) => ({ id: g.id, text: g.body, scope: g.scope, done: g.done })),
     meals: mealsToday.map((m) => ({
       id: m.id, name: m.name, calories: m.calories, protein: m.protein,
@@ -76,6 +64,7 @@ export async function GET() {
     })),
     nutrition: { calories, protein, proteinGoal: Number(settingsMap.protein_goal) || 200 },
     journal: (journal.data || []).map((j) => ({ id: j.id, date: j.day, text: j.body, summary: j.summary })),
+    recurring: recurring.map((r) => ({ id: r.id, title: r.title, weekday: r.weekday })),
     spend: {
       limit: Number(settingsMap.spend_limit) || 4928,
       spent: curMonth ? Number(curMonth.spent) : 0,
