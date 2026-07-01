@@ -1,8 +1,6 @@
 import { NextResponse } from "next/server";
-import { supabase } from "@/lib/supabase";
-import { classifyCapture } from "@/lib/claude";
 import { transcribe } from "@/lib/whisper";
-import { CATEGORIES } from "@/lib/categories";
+import { runCommand } from "@/lib/command";
 
 export const runtime = "nodejs";
 
@@ -26,7 +24,6 @@ async function downloadVoice(fileId) {
 }
 
 export async function POST(req) {
-  // Verify the secret you registered with setWebhook.
   const secret = req.headers.get("x-telegram-bot-api-secret-token");
   if (process.env.TELEGRAM_WEBHOOK_SECRET && secret !== process.env.TELEGRAM_WEBHOOK_SECRET) {
     return NextResponse.json({ ok: false }, { status: 401 });
@@ -37,7 +34,6 @@ export async function POST(req) {
   if (!msg) return NextResponse.json({ ok: true });
   const chatId = msg.chat?.id;
 
-  // Optional: lock the bot to your own chat id.
   if (process.env.TELEGRAM_ALLOWED_CHAT_ID && String(chatId) !== process.env.TELEGRAM_ALLOWED_CHAT_ID) {
     return NextResponse.json({ ok: true });
   }
@@ -56,15 +52,11 @@ export async function POST(req) {
 
   if (!text.trim()) return NextResponse.json({ ok: true });
 
-  let fields = { title: text.trim(), category: "Life Admin", priority: "medium" };
   try {
-    fields = await classifyCapture(text.trim(), CATEGORIES);
+    const r = await runCommand(text.trim());
+    await tgReply(chatId, r.reply || "Done.");
   } catch (e) {
-    /* fall back to unsorted */
+    await tgReply(chatId, "Something went wrong handling that.");
   }
-
-  await supabase.from("tasks").insert({ ...fields, source: "telegram" });
-  await tgReply(chatId, `Filed: ${fields.title}\n${fields.category} · ${fields.priority} priority`);
-
   return NextResponse.json({ ok: true });
 }

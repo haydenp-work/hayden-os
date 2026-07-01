@@ -1,674 +1,420 @@
 "use client";
 import React, { useState, useEffect, useRef } from "react";
 import {
-  Home, ListTodo, Brain, Flame, Utensils, BookOpen, Target, Wallet,
-  Mic, Plus, Star, Check, Sparkles, Eye, EyeOff, Trash2, Loader2,
-  X, ChevronRight, TrendingUp, Zap, Camera,
+  Home, Calendar, Target, Activity, Wallet, BookOpen,
+  Plus, Check, X, Trash2, Loader2, Mic, Camera, Sparkles, Pin, Zap, ChevronRight,
 } from "lucide-react";
-import { CATEGORIES } from "@/lib/categories";
 
 /* ============================================================
-   HaydenOS dashboard (production). Loads from /api/state and
-   writes through the API routes. Voice on web uses the browser
-   Web Speech API; phone voice comes in through the Telegram bot.
+   HaydenOS v2. Built around Hayden: plan and protect the day.
+   Home is the command center. State loads from /api/state.
    ============================================================ */
 
 const uid = () => Math.random().toString(36).slice(2, 10);
-const priColor = (p) => (p === "high" ? "var(--accent)" : p === "medium" ? "var(--gold)" : "var(--blue)");
+const TABS = [
+  { id: "home", label: "Home", icon: Home },
+  { id: "schedule", label: "Schedule", icon: Calendar },
+  { id: "goals", label: "Goals", icon: Target },
+  { id: "health", label: "Health", icon: Activity },
+  { id: "finances", label: "Finances", icon: Wallet },
+  { id: "journal", label: "Journal", icon: BookOpen },
+];
+const START_HOUR = 6, END_HOUR = 22, HOUR_H = 44;
+const DOW = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
+
+const pad = (n) => String(n).padStart(2, "0");
+const isoLocal = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const hhmmToMin = (s) => { const m = String(s || "").match(/(\d{1,2}):(\d{2})/); return m ? Number(m[1]) * 60 + Number(m[2]) : null; };
+function minLabel(min) { const h = Math.floor(min / 60), m = min % 60; const ap = h < 12 ? "AM" : "PM"; const h12 = h % 12 === 0 ? 12 : h % 12; return `${h12}${m ? ":" + pad(m) : ""} ${ap}`; }
 
 async function mutate(action, payload) {
   try {
-    const res = await fetch("/api/mutate", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ action, payload }),
-    });
+    const res = await fetch("/api/mutate", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action, payload }) });
     return await res.json().catch(() => ({}));
   } catch (e) { return {}; }
 }
 async function post(path, body) {
-  const res = await fetch(path, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body || {}),
-  });
-  return res.json();
+  const res = await fetch(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body || {}) });
+  return res.json().catch(() => ({}));
 }
-
 function fileToBase64(file) {
   return new Promise((resolve, reject) => {
     const r = new FileReader();
-    r.onload = () => {
-      const [meta, data] = String(r.result).split(",");
-      const mediaType = (meta.match(/data:(.*?);/) || [])[1] || "image/png";
-      resolve({ data, mediaType });
-    };
-    r.onerror = reject;
-    r.readAsDataURL(file);
+    r.onload = () => { const [meta, data] = String(r.result).split(","); const mediaType = (meta.match(/data:(.*?);/) || [])[1] || "image/png"; resolve({ data, mediaType }); };
+    r.onerror = reject; r.readAsDataURL(file);
   });
 }
-
 function startVoice(onText, onState) {
   const Rec = typeof window !== "undefined" && (window.SpeechRecognition || window.webkitSpeechRecognition);
   if (!Rec) { onState && onState("unsupported"); return null; }
-  const r = new Rec();
-  r.lang = "en-US"; r.interimResults = false; r.maxAlternatives = 1;
+  const r = new Rec(); r.lang = "en-US"; r.interimResults = false; r.maxAlternatives = 1;
   r.onresult = (e) => { onText(e.results[0][0].transcript); onState && onState("idle"); };
-  r.onerror = () => onState && onState("idle");
-  r.onend = () => onState && onState("idle");
-  r.start(); onState && onState("listening");
-  return r;
+  r.onerror = () => onState && onState("idle"); r.onend = () => onState && onState("idle");
+  r.start(); onState && onState("listening"); return r;
 }
-
-const NAV = [
-  { id: "home", label: "Home", icon: Home },
-  { id: "crm", label: "Tasks", icon: ListTodo },
-  { id: "brain", label: "Brain", icon: Brain },
-  { id: "habits", label: "Habits", icon: Flame },
-  { id: "nutrition", label: "Nutrition", icon: Utensils },
-  { id: "journal", label: "Journal", icon: BookOpen },
-  { id: "goals", label: "Goals", icon: Target },
-  { id: "finance", label: "Finance", icon: Wallet },
-];
 
 export default function Dashboard() {
   const [os, setOs] = useState(null);
   const [view, setView] = useState("home");
-  const [toast, setToast] = useState(null);
   const [now, setNow] = useState(new Date());
+  const [toast, setToast] = useState(null);
 
-  // Every hook is declared here, before the loading return below, so the
-  // number of hooks is identical on every render (React rules of hooks).
-  const [capText, setCapText] = useState("");
-  const [capLoading, setCapLoading] = useState(false);
-  const [capVoice, setCapVoice] = useState("idle");
-  const [advice, setAdvice] = useState("");
-  const [adviceLoading, setAdviceLoading] = useState(false);
+  const [mkText, setMkText] = useState("");
+  const [mkReply, setMkReply] = useState("");
+  const [mkLoading, setMkLoading] = useState(false);
+  const [mkVoice, setMkVoice] = useState("idle");
+  const [planning, setPlanning] = useState(false);
+
+  const [dtaskInput, setDtaskInput] = useState("");
+  const [wtaskInput, setWtaskInput] = useState("");
+  const [goalInput, setGoalInput] = useState("");
+  const [goalScope, setGoalScope] = useState("month");
   const [mealText, setMealText] = useState("");
   const [mealLoading, setMealLoading] = useState(false);
   const [jText, setJText] = useState("");
   const [jVoice, setJVoice] = useState("idle");
   const [jSaving, setJSaving] = useState(false);
-  const [crmFilter, setCrmFilter] = useState("All");
-  const [brainCat, setBrainCat] = useState(null);
-  const [brainSummary, setBrainSummary] = useState("");
-  const [brainLoading, setBrainLoading] = useState(false);
-  const [noteText, setNoteText] = useState("");
-  const [goalText, setGoalText] = useState("");
-  const [goalScope, setGoalScope] = useState("week");
   const [spentInput, setSpentInput] = useState("");
   const [limitInput, setLimitInput] = useState("");
-  const [schedInput, setSchedInput] = useState("");
+  const [proteinInput, setProteinInput] = useState("");
+
+  const [evTitle, setEvTitle] = useState("");
+  const [evDay, setEvDay] = useState("");
+  const [evStart, setEvStart] = useState("09:00");
+  const [evEnd, setEvEnd] = useState("10:00");
+
   const [impSpend, setImpSpend] = useState(false);
   const [impSched, setImpSched] = useState(false);
   const spendFileRef = useRef(null);
   const schedFileRef = useRef(null);
 
-  useEffect(() => {
-    const t = setInterval(() => setNow(new Date()), 30000);
-    return () => clearInterval(t);
-  }, []);
+  useEffect(() => { load(); }, []);
+  useEffect(() => { const t = setInterval(() => setNow(new Date()), 30000); return () => clearInterval(t); }, []);
 
-  useEffect(() => {
-    (async () => {
-      const res = await fetch("/api/state");
-      if (res.status === 401) { window.location.href = "/login"; return; }
-      const data = await res.json();
-      setOs(data);
-    })();
-  }, []);
+  async function load() {
+    const res = await fetch("/api/state");
+    if (res.status === 401) { window.location.href = "/login"; return; }
+    setOs(await res.json());
+  }
+  function flash(m) { setToast(m); setTimeout(() => setToast(null), 2600); }
+  function patch(fn) { setOs((prev) => { const next = structuredClone(prev); fn(next); return next; }); }
 
-  const flash = (m) => { setToast(m); setTimeout(() => setToast(null), 2600); };
-  const patch = (fn) => setOs((p) => fn({ ...p }));
-
-  if (!os) {
-    return (<><Style /><div className="os boot"><Loader2 size={22} className="spin" /><span>Loading HaydenOS</span></div></>);
+  /* ---------- master key ---------- */
+  async function runMaster() {
+    const t = mkText.trim(); if (!t) return;
+    setMkLoading(true); setMkReply("");
+    const r = await post("/api/command", { text: t });
+    setMkReply(r.reply || "Done."); setMkText("");
+    await load();
+    setMkLoading(false);
   }
-
-  const activeTasks = os.tasks.filter((t) => t.status === "active");
-  const keyTasks = activeTasks.filter((t) => t.starred);
-  const habitPct = () => {
-    const all = os.habits.flatMap((h) => h.subtasks);
-    if (!all.length) return 0;
-    return Math.round((all.filter((s) => s.done).length / all.length) * 100);
-  };
-
-  /* ---------- actions ---------- */
-  function completeTask(id) {
-    patch((p) => { p.tasks = p.tasks.map((t) => t.id === id ? { ...t, status: "done", starred: false } : t); return p; });
-    mutate("task.complete", { id }); flash("Done. Sent to archive.");
-  }
-  function toggleStar(id) {
-    const t = os.tasks.find((x) => x.id === id); const v = !t.starred;
-    patch((p) => { p.tasks = p.tasks.map((x) => x.id === id ? { ...x, starred: v } : x); return p; });
-    mutate("task.star", { id, starred: v });
-  }
-  function delTask(id) {
-    patch((p) => { p.tasks = p.tasks.filter((t) => t.id !== id); return p; });
-    mutate("task.delete", { id });
-  }
-  function toggleSub(hid, sid) {
-    let v = false;
-    patch((p) => {
-      p.habits = p.habits.map((h) => h.id === hid ? { ...h, subtasks: h.subtasks.map((s) => { if (s.id === sid) { v = !s.done; return { ...s, done: v }; } return s; }) } : h);
-      return p;
-    });
-    mutate("habit.toggleSub", { subtaskId: sid, done: v });
-  }
-  function toggleGoal(id) {
-    const g = os.goals.find((x) => x.id === id); const v = !g.done;
-    patch((p) => { p.goals = p.goals.map((x) => x.id === id ? { ...x, done: v } : x); return p; });
-    mutate("goal.toggle", { id, done: v });
-  }
-  async function addGoal(text, scope) {
-    if (!text.trim()) return;
-    const r = await mutate("goal.add", { text: text.trim(), scope });
-    patch((p) => { p.goals = [...p.goals, { id: r.id || uid(), text: text.trim(), scope, done: false }]; return p; });
-  }
-  function delGoal(id) {
-    patch((p) => { p.goals = p.goals.filter((g) => g.id !== id); return p; });
-    mutate("goal.delete", { id });
-  }
-  async function addNote(cat, text) {
-    if (!text.trim()) return;
-    const r = await mutate("note.add", { category: cat, text: text.trim() });
-    patch((p) => { p.brainNotes = { ...p.brainNotes, [cat]: [{ id: r.id || uid(), text: text.trim() }, ...(p.brainNotes[cat] || [])] }; return p; });
-  }
-  function delNote(cat, id) {
-    patch((p) => { p.brainNotes = { ...p.brainNotes, [cat]: (p.brainNotes[cat] || []).filter((n) => n.id !== id) }; return p; });
-    mutate("note.delete", { id });
-  }
-  async function setSpend(amount) {
-    const v = Number(amount) || 0;
-    patch((p) => { p.spend = { ...p.spend, spent: v }; return p; });
-    await mutate("spend.set", { amount: v });
-    flash("Spend updated.");
-  }
-  async function setLimit(amount) {
-    const v = Number(amount) || 0;
-    patch((p) => { p.spend = { ...p.spend, limit: v }; return p; });
-    await mutate("spend.limit", { amount: v });
-    flash("Limit updated.");
-  }
-  async function addScheduleItem(body) {
-    if (!body.trim()) return;
-    const r = await mutate("schedule.add", { body: body.trim() });
-    patch((p) => { p.schedule = { ...p.schedule, entries: [...p.schedule.entries, { id: r.id || uid(), body: body.trim() }] }; return p; });
-  }
-  function delScheduleItem(id) {
-    patch((p) => { p.schedule = { ...p.schedule, entries: p.schedule.entries.filter((e) => e.id !== id) }; return p; });
-    mutate("schedule.delete", { id });
-  }
-  function toggleUploaded() {
-    const week = os.schedule.week;
-    const done = os.schedule.uploadedWeek === week;
-    const next = done ? "" : week;
-    patch((p) => { p.schedule = { ...p.schedule, uploadedWeek: next }; return p; });
-    mutate("schedule.uploaded", { week: next });
-    flash(done ? "Reminder reset." : "Marked done for this week.");
-  }
-  async function importSpendShot(file) {
-    if (!file) return;
-    setImpSpend(true);
-    try {
-      const { data, mediaType } = await fileToBase64(file);
-      const r = await post("/api/import", { type: "spend", image: data, mediaType });
-      if (r && typeof r.newTotal === "number") {
-        patch((p) => { p.spend = { ...p.spend, spent: r.newTotal }; return p; });
-        flash(`Added $${r.added.toLocaleString()} from statement. Month total $${r.newTotal.toLocaleString()}.`);
-      } else flash("Could not read that statement. Try a clearer screenshot.");
-    } catch (e) { flash("Import failed. Try again."); }
-    setImpSpend(false);
-    if (spendFileRef.current) spendFileRef.current.value = "";
-  }
-  async function importSchedShot(file) {
-    if (!file) return;
-    setImpSched(true);
-    try {
-      const { data, mediaType } = await fileToBase64(file);
-      const r = await post("/api/import", { type: "schedule", image: data, mediaType });
-      if (r && Array.isArray(r.items) && r.items.length) {
-        patch((p) => { p.schedule = { ...p.schedule, entries: [...p.schedule.entries, ...r.items] }; return p; });
-        flash(`Added ${r.items.length} items from your schedule.`);
-      } else flash("Could not read that schedule. Try a clearer screenshot.");
-    } catch (e) { flash("Import failed. Try again."); }
-    setImpSched(false);
-    if (schedFileRef.current) schedFileRef.current.value = "";
+  function mkMic() {
+    if (mkVoice === "listening") return;
+    startVoice((txt) => setMkText((p) => (p ? p + " " : "") + txt), setMkVoice);
   }
 
-  /* ---------- capture ---------- */
-  async function capture() {
-    if (!capText.trim()) return;
-    setCapLoading(true);
-    const r = await post("/api/capture", { text: capText.trim() });
-    if (r.task) { patch((p) => { p.tasks = [r.task, ...p.tasks]; return p; }); flash(`Filed under ${r.task.category}, ${r.task.priority} priority`); }
-    else flash("Could not file that. Try again.");
-    setCapText(""); setCapLoading(false);
+  /* ---------- plan my day ---------- */
+  async function planDay() {
+    setPlanning(true);
+    const r = await post("/api/plan", {});
+    if (r.added && r.added.length) { patch((p) => { p.dailyTasks = [...p.dailyTasks, ...r.added]; }); flash(`Added ${r.added.length} tasks to today.`); }
+    else flash("Nothing new to add right now.");
+    setPlanning(false);
   }
 
-  /* ---------- strategic ---------- */
-  async function getAdvice() {
-    setAdviceLoading(true); setAdvice("");
-    const r = await post("/api/advice", {});
-    setAdvice(r.advice || "Claude is not reachable right now. Try again in a moment.");
-    setAdviceLoading(false);
-  }
+  /* ---------- daily tasks ---------- */
+  async function addDaily(v) { const t = (v ?? dtaskInput).trim(); if (!t) return; const r = await mutate("dtask.add", { title: t }); patch((p) => { p.dailyTasks.push({ id: r.id || uid(), title: t, done: false }); }); setDtaskInput(""); }
+  function toggleDaily(id, done) { patch((p) => { const x = p.dailyTasks.find((t) => t.id === id); if (x) x.done = done; }); mutate("dtask.toggle", { id, done }); }
+  function delDaily(id) { patch((p) => { p.dailyTasks = p.dailyTasks.filter((t) => t.id !== id); }); mutate("dtask.delete", { id }); }
 
-  /* ---------- nutrition ---------- */
-  async function logMeal() {
-    if (!mealText.trim()) return;
-    setMealLoading(true);
-    const r = await post("/api/meal", { text: mealText.trim() });
-    if (r.meal) patch((p) => { p.meals = [r.meal, ...p.meals]; return p; });
+  /* ---------- weekly tasks ---------- */
+  async function addWeekly() { const t = wtaskInput.trim(); if (!t) return; const r = await mutate("wtask.add", { title: t }); patch((p) => { p.weeklyTasks.push({ id: r.id || uid(), title: t, done: false, pinned: false }); }); setWtaskInput(""); }
+  function toggleWeekly(id, done) { patch((p) => { const x = p.weeklyTasks.find((t) => t.id === id); if (x) x.done = done; }); mutate("wtask.toggle", { id, done }); }
+  function pinWeekly(id, pinned) { patch((p) => { const x = p.weeklyTasks.find((t) => t.id === id); if (x) x.pinned = pinned; }); mutate("wtask.pin", { id, pinned }); }
+  function delWeekly(id) { patch((p) => { p.weeklyTasks = p.weeklyTasks.filter((t) => t.id !== id); }); mutate("wtask.delete", { id }); }
+
+  /* ---------- goals ---------- */
+  async function addGoal() { const t = goalInput.trim(); if (!t) return; const r = await mutate("goal.add", { text: t, scope: goalScope }); patch((p) => { p.goals.unshift({ id: r.id || uid(), text: t, scope: goalScope, done: false }); }); setGoalInput(""); }
+  function toggleGoal(id, done) { patch((p) => { const x = p.goals.find((g) => g.id === id); if (x) x.done = done; }); mutate("goal.toggle", { id, done }); }
+  function delGoal(id) { patch((p) => { p.goals = p.goals.filter((g) => g.id !== id); }); mutate("goal.delete", { id }); }
+
+  /* ---------- events ---------- */
+  async function addEvent() {
+    const title = evTitle.trim(); if (!title) return;
+    const day = evDay || isoLocal(now);
+    const s = hhmmToMin(evStart) ?? 540; const e = hhmmToMin(evEnd) ?? s + 60;
+    const r = await mutate("event.add", { day, startMin: s, endMin: e, title });
+    patch((p) => { p.events.push({ id: r.id || uid(), day, startMin: s, endMin: e, title }); });
+    setEvTitle(""); flash("Event added.");
+  }
+  function delEvent(id) { patch((p) => { p.events = p.events.filter((e) => e.id !== id); }); mutate("event.delete", { id }); }
+
+  /* ---------- meals ---------- */
+  async function addMeal() {
+    const t = mealText.trim(); if (!t) return; setMealLoading(true);
+    const r = await post("/api/meal", { text: t });
+    if (r.meal) patch((p) => { p.meals.unshift(r.meal); p.nutrition.calories += r.meal.calories || 0; p.nutrition.protein += r.meal.protein || 0; });
     setMealText(""); setMealLoading(false);
   }
 
   /* ---------- journal ---------- */
   async function saveJournal() {
-    if (!jText.trim()) return;
-    setJSaving(true);
-    const r = await post("/api/journal", { text: jText.trim() });
-    if (r.entry) patch((p) => { p.journal = [r.entry, ...p.journal]; return p; });
-    setJText(""); setJSaving(false);
+    const t = jText.trim(); if (!t) return; setJSaving(true);
+    const r = await post("/api/journal", { text: t });
+    if (r.entry) patch((p) => { p.journal.unshift(r.entry); });
+    setJText(""); setJSaving(false); flash("Reflection saved.");
+  }
+  function jMic() { if (jVoice === "listening") return; startVoice((txt) => setJText((p) => (p ? p + " " : "") + txt), setJVoice); }
+
+  /* ---------- spend / nutrition settings ---------- */
+  function setSpend(a) { const v = Number(a) || 0; patch((p) => { p.spend.spent = v; }); mutate("spend.set", { amount: v }); flash("Spend updated."); }
+  function setLimit(a) { const v = Number(a) || 0; patch((p) => { p.spend.limit = v; }); mutate("spend.limit", { amount: v }); flash("Limit updated."); }
+  function setProteinGoal(a) { const v = Number(a) || 200; patch((p) => { p.nutrition.proteinGoal = v; }); mutate("protein.goal", { grams: v }); flash("Protein goal updated."); }
+
+  /* ---------- imports ---------- */
+  async function importSpendShot(file) {
+    if (!file) return; setImpSpend(true);
+    try { const { data, mediaType } = await fileToBase64(file); const r = await post("/api/import", { type: "spend", image: data, mediaType });
+      if (r && typeof r.newTotal === "number") { patch((p) => { p.spend.spent = r.newTotal; }); flash(`Added $${r.added.toLocaleString()}. Month total $${r.newTotal.toLocaleString()}.`); }
+      else flash("Could not read that statement.");
+    } catch (e) { flash("Import failed."); }
+    setImpSpend(false); if (spendFileRef.current) spendFileRef.current.value = "";
+  }
+  async function importSchedShot(file) {
+    if (!file) return; setImpSched(true);
+    try { const { data, mediaType } = await fileToBase64(file); const r = await post("/api/import", { type: "schedule", image: data, mediaType });
+      if (r && Array.isArray(r.events) && r.events.length) { await load(); flash(`Added ${r.events.length} events to your week.`); }
+      else flash("Could not read that schedule.");
+    } catch (e) { flash("Import failed."); }
+    setImpSched(false); if (schedFileRef.current) schedFileRef.current.value = "";
   }
 
-  /* ===================== views ===================== */
+  if (!os) {
+    return (<div className="os boot"><Loader2 size={20} className="spin" /><span>Loading your dashboard...</span><Style /></div>);
+  }
+
+  const monday = new Date(os.week + "T00:00:00");
+  const days = [...Array(7)].map((_, i) => { const d = new Date(monday); d.setDate(monday.getDate() + i); return d; });
+
+  const VIEWS = { home: renderHome, schedule: renderSchedule, goals: renderGoals, health: renderHealth, finances: renderFinances, journal: renderJournal };
+
+  /* ===================== HOME ===================== */
   function renderHome() {
-    const pct = habitPct();
-    const spent = os.spend?.spent || 0;
-    const limit = os.spend?.limit || 4928;
     const hour = now.getHours();
     const greet = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
-    const focus = os.goals.find((g) => g.scope === "month" && !g.done)?.text || "Set a monthly goal";
-    const cals = os.meals.reduce((a, b) => a + b.calories, 0);
-    const pro = os.meals.reduce((a, b) => a + b.protein, 0);
-    const sow = new Date(now); sow.setDate(now.getDate() - now.getDay());
-    const week = [...Array(7)].map((_, i) => { const d = new Date(sow); d.setDate(sow.getDate() + i); return d; });
-    const dow = ["SU", "MO", "TU", "WE", "TH", "FR", "SA"];
-    const isFriday = now.getDay() === 5;
-    const uploadedThisWeek = !!(os.schedule?.uploadedWeek && os.schedule.uploadedWeek === os.schedule.week);
+    const pinned = os.weeklyTasks.filter((t) => t.pinned && !t.done);
+    const nut = os.nutrition;
+    const pPct = nut.proteinGoal ? Math.min(100, Math.round((nut.protein / nut.proteinGoal) * 100)) : 0;
 
     return (
-      <div className="cols">
-        {/* LEFT */}
-        <div className="col">
-          <div className="panel">
-            <div className="plabel"><span className="num">00</span> OPERATOR <span className="live"><span className="dot" /> online</span></div>
-            <div className="op-name">{os.profile.name}</div>
-            <div className="op-sub">{os.profile.role}{os.profile.org ? ` · ${os.profile.org}` : ""}</div>
-            <div className="op-meta">
-              <div><div className="mk">Focus</div><div className="mv serif">{focus}</div></div>
-              <div><div className="mk">Today</div><div className="mv mono">{pct}%</div></div>
+      <div className="home">
+        <div className="view-head"><h1>{greet}, <span className="g-name">Hayden</span></h1><div className="sess-date">{now.toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" })}</div></div>
+
+        {/* MASTER KEY */}
+        <div className="panel mk-panel">
+          <div className="plabel"><Sparkles size={13} /> MASTER KEY <span className="pcount mono">command + advice</span></div>
+          <div className="mk-row">
+            <textarea className="mk-input" rows={2} placeholder="Ask for advice, or tell me what to do. Add a task, move it, put Duke visit Thursday at 2, plan around my week..." value={mkText} onChange={(e) => setMkText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) runMaster(); }} />
+            <div className="mk-actions">
+              <button className={mkVoice === "listening" ? "cap-mic rec" : "cap-mic"} onClick={mkMic} title="Voice"><Mic size={16} /></button>
+              <button className="cap-go" onClick={runMaster} disabled={mkLoading}>{mkLoading ? <Loader2 size={14} className="spin" /> : <>Run <ChevronRight size={13} /></>}</button>
             </div>
           </div>
+          {mkReply && <div className="mk-reply">{mkReply}</div>}
+        </div>
 
-          <SpendPanel spent={spent} limit={limit} history={os.spend?.history || []} />
-
+        {/* TODAY + right rail */}
+        <div className="home-row">
           <div className="panel">
-            <div className="plabel"><span className="num">04</span> KEY TASKS <span className="pcount">{keyTasks.length}</span></div>
-            {keyTasks.length === 0 && <div className="empty">Star 3 to 5 tasks to set today's priorities.</div>}
+            <div className="plabel"><Zap size={13} /> TODAY
+              <button className="ghost-btn plan" onClick={planDay} disabled={planning}>{planning ? <Loader2 size={12} className="spin" /> : <Sparkles size={12} />} Plan my day</button>
+            </div>
             <div className="list">
-              {keyTasks.map((t) => (
+              {pinned.map((t) => (
                 <div key={t.id} className="row">
-                  <button className="check" onClick={() => completeTask(t.id)}><Check size={13} /></button>
+                  <button className="check" onClick={() => toggleWeekly(t.id, true)}><Check size={13} /></button>
                   <span className="row-title">{t.title}</span>
-                  <span className="dot-pri" style={{ background: priColor(t.priority) }} />
+                  <span className="tag-pin"><Pin size={11} /> weekly</span>
                 </div>
               ))}
+              {os.dailyTasks.map((t) => (
+                <div key={t.id} className="row">
+                  <button className={t.done ? "check on" : "check"} onClick={() => toggleDaily(t.id, !t.done)}>{t.done && <Check size={13} />}</button>
+                  <span className={t.done ? "row-title strike" : "row-title"}>{t.title}</span>
+                  <button className="icon-btn faint" onClick={() => delDaily(t.id)}><X size={13} /></button>
+                </div>
+              ))}
+              {pinned.length === 0 && os.dailyTasks.length === 0 && <div className="empty">Nothing yet. Pin a weekly task or hit Plan my day.</div>}
             </div>
-          </div>
-        </div>
-
-        {/* MIDDLE */}
-        <div className="col">
-          <div className="panel session">
-            <div className="plabel"><span className="num">01</span> SESSION <span className="pcount mono">{now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false })} LOCAL</span></div>
-            <div className="greeting">{greet}, <span className="g-name">{os.profile.name}</span>.</div>
-            <div className="sess-date">{now.toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" })}</div>
-            <div className="cap">
-              <input className="cap-inp" placeholder="Capture anything. Claude files it." value={capText} onChange={(e) => setCapText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") capture(); }} />
-              <button className={capVoice === "listening" ? "cap-mic rec" : "cap-mic"} onClick={() => startVoice((t) => setCapText((p) => (p ? p + " " : "") + t), setCapVoice)}><Mic size={15} /></button>
-              <button className="cap-go" onClick={capture} disabled={capLoading}>{capLoading ? <Loader2 size={14} className="spin" /> : "Capture"}</button>
-            </div>
-          </div>
-
-          <div className="panel">
-            <div className="plabel"><span className="num">02</span> HABITS <span className="pcount mono">{pct}%</span></div>
-            <div className="habit-cards">
-              {os.habits.map((h) => {
-                const done = h.subtasks.filter((s) => s.done).length;
-                const full = h.subtasks.length && done === h.subtasks.length;
-                const w = h.subtasks.length ? (done / h.subtasks.length) * 100 : 0;
-                return (
-                  <button key={h.id} className={full ? "hcard full" : "hcard"} onClick={() => setView("habits")}>
-                    <div className="hc-top"><span className="hc-name">{h.name}</span>{full ? <Check size={13} color="var(--accent)" /> : null}</div>
-                    <div className="hc-bar"><span style={{ width: w + "%" }} /></div>
-                    <div className="hc-frac mono">{done}/{h.subtasks.length}</div>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          <div className="panel">
-            <div className="plabel"><span className="num">05</span> STRATEGIC READ
-              <button className="ghost-btn sm" onClick={getAdvice} disabled={adviceLoading}>{adviceLoading ? <Loader2 size={12} className="spin" /> : <Sparkles size={12} />} {adviceLoading ? "Thinking" : "Top 3"}</button>
-            </div>
-            {!advice && !adviceLoading && <div className="empty">Ask Claude what to prioritize across every task and goal.</div>}
-            {advice && <div className="advice">{advice.split("\n").filter(Boolean).map((l, i) => <p key={i}>{l}</p>)}</div>}
-          </div>
-
-          <div className="panel">
-            <div className="plabel"><span className="num">06</span> SCHEDULE <span className="pcount mono">{now.toLocaleDateString([], { month: "short", year: "numeric" }).toUpperCase()}</span></div>
-            <div className="cal-strip">
-              {week.map((d, i) => {
-                const isToday = d.toDateString() === now.toDateString();
-                return (
-                  <div key={i} className={isToday ? "cal-day on" : "cal-day"}>
-                    <div className="cal-dow">{dow[d.getDay()]}</div>
-                    <div className="cal-num mono">{d.getDate()}</div>
-                  </div>
-                );
-              })}
-            </div>
-
-            <button className={uploadedThisWeek ? "reminder done" : (isFriday ? "reminder due" : "reminder")} onClick={toggleUploaded}>
-              <span className="rem-box">{uploadedThisWeek && <Check size={12} />}</span>
-              <span className="rem-text">Upload next week's schedule</span>
-              <span className="rem-tag mono">{uploadedThisWeek ? "done" : isFriday ? "due today" : "every Fri"}</span>
-            </button>
-
             <div className="cap" style={{ marginTop: 12 }}>
-              <input className="cap-inp" placeholder="Add a schedule item, e.g. Mon 9am Duke call" value={schedInput} onChange={(e) => setSchedInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { addScheduleItem(schedInput); setSchedInput(""); } }} />
-              <button className="cap-go" onClick={() => { addScheduleItem(schedInput); setSchedInput(""); }}>Add</button>
-              <input ref={schedFileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => importSchedShot(e.target.files && e.target.files[0])} />
-              <button className="cap-mic" title="Import from screenshot" onClick={() => schedFileRef.current && schedFileRef.current.click()} disabled={impSched}>{impSched ? <Loader2 size={15} className="spin" /> : <Camera size={15} />}</button>
+              <input className="cap-inp" placeholder="Add a task for today" value={dtaskInput} onChange={(e) => setDtaskInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addDaily(); }} />
+              <button className="cap-go" onClick={() => addDaily()}><Plus size={15} /></button>
             </div>
+          </div>
 
-            <div className="list" style={{ marginTop: 8 }}>
-              {os.schedule.entries.length === 0 && <div className="empty">No schedule items yet. Add your week above.</div>}
-              {os.schedule.entries.map((e) => (
-                <div key={e.id} className="row">
-                  <span className="dot-pri" style={{ background: "var(--accent)" }} />
-                  <span className="row-title">{e.body}</span>
-                  <button className="icon-btn faint" onClick={() => delScheduleItem(e.id)}><X size={13} /></button>
+          <div className="stack">
+            <div className="panel nut-panel">
+              <div className="plabel"><Activity size={13} /> NUTRITION</div>
+              <div className="nut-ring-wrap">
+                <div className="ring-holder"><Ring pct={pPct} /><div className="ring-center"><div className="ring-pct mono">{pPct}%</div><div className="ring-cap">protein</div></div></div>
+                <div className="nut-figs">
+                  <div className="nut-line"><span className="mono big">{nut.protein}</span><span className="nut-unit">/ {nut.proteinGoal} g protein</span></div>
+                  <div className="nut-line"><span className="mono big">{nut.calories}</span><span className="nut-unit">kcal today</span></div>
                 </div>
-              ))}
+              </div>
             </div>
+            <SpendPanel spend={os.spend} />
           </div>
         </div>
 
-        {/* RIGHT */}
-        <div className="col">
-          <div className="panel">
-            <div className="plabel"><span className="num">03</span> GOALS</div>
-            {["week", "month"].map((sc) => (
-              <div key={sc} className="goal-block">
-                <div className="goal-scope">This {sc}</div>
-                {os.goals.filter((g) => g.scope === sc).length === 0 && <div className="empty">No {sc} goals yet.</div>}
-                {os.goals.filter((g) => g.scope === sc).map((g) => (
-                  <div key={g.id} className={g.done ? "goal done" : "goal"} onClick={() => toggleGoal(g.id)}>
-                    <span className="goal-box">{g.done && <Check size={11} />}</span>{g.text}
-                  </div>
-                ))}
-              </div>
-            ))}
-          </div>
+        {/* WEEK CALENDAR (largest) */}
+        <div className="panel cal-panel">
+          <div className="plabel"><Calendar size={13} /> THIS WEEK <span className="pcount mono">{monday.toLocaleDateString([], { month: "short", day: "numeric" })} - {days[6].toLocaleDateString([], { month: "short", day: "numeric" })}</span></div>
+          <WeekCalendar days={days} events={os.events} now={now} onDelete={delEvent} />
+          <EventForm days={days} evTitle={evTitle} setEvTitle={setEvTitle} evDay={evDay} setEvDay={setEvDay} evStart={evStart} setEvStart={setEvStart} evEnd={evEnd} setEvEnd={setEvEnd} onAdd={addEvent} defaultDay={isoLocal(now)} />
+        </div>
 
+        {/* WEEKLY TASKS + MONTHLY GOALS */}
+        <div className="home-row2">
           <div className="panel">
-            <div className="plabel"><span className="num">07</span> NUTRITION <span className="pcount mono">TODAY</span></div>
-            <div className="nut-big mono">{cals}<span className="nut-unit">kcal</span></div>
-            <div className="nut-sub mono">{pro}g protein · {os.meals.length} meals</div>
+            <div className="plabel"><Check size={13} /> WEEKLY TASKS</div>
+            <div className="list">
+              {os.weeklyTasks.map((t) => (
+                <div key={t.id} className="row">
+                  <button className={t.done ? "check on" : "check"} onClick={() => toggleWeekly(t.id, !t.done)}>{t.done && <Check size={13} />}</button>
+                  <span className={t.done ? "row-title strike" : "row-title"}>{t.title}</span>
+                  <button className={t.pinned ? "pin-btn on" : "pin-btn"} title="Pin to today" onClick={() => pinWeekly(t.id, !t.pinned)}><Pin size={13} /></button>
+                  <button className="icon-btn faint" onClick={() => delWeekly(t.id)}><X size={13} /></button>
+                </div>
+              ))}
+              {os.weeklyTasks.length === 0 && <div className="empty">Add the things you want done this week.</div>}
+            </div>
             <div className="cap" style={{ marginTop: 12 }}>
-              <input className="cap-inp" placeholder="Log a meal, e.g. chicken and rice" value={mealText} onChange={(e) => setMealText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") logMeal(); }} />
-              <button className="cap-go" onClick={logMeal} disabled={mealLoading}>{mealLoading ? <Loader2 size={14} className="spin" /> : "Log"}</button>
+              <input className="cap-inp" placeholder="Add a weekly task" value={wtaskInput} onChange={(e) => setWtaskInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addWeekly(); }} />
+              <button className="cap-go" onClick={addWeekly}><Plus size={15} /></button>
             </div>
           </div>
-        </div>
-      </div>
-    );
-  }
 
-  function renderCrm() {
-    const order = { high: 0, medium: 1, low: 2 };
-    const shown = activeTasks
-      .filter((t) => crmFilter === "All" || t.category === crmFilter)
-      .sort((a, b) => (b.starred - a.starred) || order[a.priority] - order[b.priority]);
-    const archived = os.tasks.filter((t) => t.status === "done").slice(0, 8);
-    return (
-      <div>
-        <div className="chips">
-          {["All", ...CATEGORIES].map((c) => (
-            <button key={c} className={crmFilter === c ? "chip on" : "chip"} onClick={() => setCrmFilter(c)}>{c}</button>
-          ))}
-        </div>
-        <div className="panel">
-          {shown.length === 0 && <div className="empty">Nothing here. Capture something above.</div>}
-          <div className="list">
-            {shown.map((t) => (
-              <div key={t.id} className="row task">
-                <button className="check" onClick={() => completeTask(t.id)}><Check size={13} /></button>
-                <button className={t.starred ? "star on" : "star"} onClick={() => toggleStar(t.id)}><Star size={13} /></button>
-                <span className="row-title">{t.title}</span>
-                <span className="tag">{t.category}</span>
-                <span className="pill" style={{ color: priColor(t.priority), borderColor: priColor(t.priority) }}>{t.priority}</span>
-                <button className="icon-btn faint" onClick={() => delTask(t.id)}><Trash2 size={13} /></button>
-              </div>
-            ))}
-          </div>
-        </div>
-        {archived.length > 0 && (
-          <div className="panel" style={{ marginTop: 14 }}>
-            <div className="panel-head"><div className="panel-title">Recently completed</div></div>
-            <div className="list">
-              {archived.map((t) => (
-                <div key={t.id} className="row done-row">
-                  <span className="check on"><Check size={13} /></span>
-                  <span className="row-title strike">{t.title}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  async function summarizeCat(cat) {
-    setBrainLoading(true); setBrainSummary("");
-    const r = await post("/api/brain", { category: cat });
-    setBrainSummary(r.summary || "Claude is not reachable right now.");
-    setBrainLoading(false);
-  }
-  function renderBrain() {
-    if (brainCat) {
-      const tasks = activeTasks.filter((t) => t.category === brainCat);
-      const notes = os.brainNotes[brainCat] || [];
-      return (
-        <div>
-          <button className="back" onClick={() => { setBrainCat(null); setBrainSummary(""); }}><ChevronRight size={14} style={{ transform: "rotate(180deg)" }} /> All areas</button>
           <div className="panel">
-            <div className="panel-head">
-              <div className="panel-title"><Brain size={14} /> {brainCat}</div>
-              <button className="ghost-btn" onClick={() => summarizeCat(brainCat)} disabled={brainLoading}>
-                {brainLoading ? <Loader2 size={13} className="spin" /> : <Sparkles size={13} />} Summary
-              </button>
-            </div>
-            {brainSummary && <div className="advice"><p>{brainSummary}</p></div>}
-            <div className="sub-label">Open tasks</div>
-            {tasks.length === 0 ? <div className="empty">No open tasks here.</div> : (
-              <div className="list">{tasks.map((t) => <div key={t.id} className="row"><span className="dot-pri" style={{ background: priColor(t.priority) }} /><span className="row-title">{t.title}</span></div>)}</div>
-            )}
-            <div className="sub-label">Notes and links</div>
-            <div className="note-add">
-              <input className="inp" placeholder="Add a note or link" value={noteText} onChange={(e) => setNoteText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { addNote(brainCat, noteText); setNoteText(""); } }} />
-              <button className="solid-btn" onClick={() => { addNote(brainCat, noteText); setNoteText(""); }}><Plus size={14} /></button>
-            </div>
-            <div className="list">
-              {notes.map((n) => (
-                <div key={n.id} className="row note">
-                  <span className="row-title">{n.text}</span>
-                  <button className="icon-btn faint" onClick={() => delNote(brainCat, n.id)}><X size={13} /></button>
-                </div>
-              ))}
+            <div className="plabel"><Target size={13} /> MONTHLY GOALS</div>
+            <GoalList goals={os.goals.filter((g) => g.scope === "month")} onToggle={toggleGoal} onDelete={delGoal} empty="Set your goals for the month." />
+            <div className="cap" style={{ marginTop: 12 }}>
+              <input className="cap-inp" placeholder="Add a monthly goal" value={goalInput} onChange={(e) => setGoalInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { setGoalScope("month"); addGoal(); } }} />
+              <button className="cap-go" onClick={() => { setGoalScope("month"); addGoal(); }}><Plus size={15} /></button>
             </div>
           </div>
         </div>
-      );
-    }
-    return (
-      <div className="brain-grid">
-        {CATEGORIES.map((c) => {
-          const count = activeTasks.filter((t) => t.category === c).length;
-          const noteCount = (os.brainNotes[c] || []).length;
-          return (
-            <button key={c} className="brain-tile" onClick={() => setBrainCat(c)}>
-              <div className="tile-name">{c}</div>
-              <div className="tile-meta">{count} open · {noteCount} notes</div>
-              <ChevronRight size={16} className="tile-arrow" />
-            </button>
-          );
-        })}
       </div>
     );
   }
 
-  function renderHabits() {
+  /* ===================== SCHEDULE ===================== */
+  function renderSchedule() {
     return (
-      <div className="habit-stack">
-        {os.habits.map((h) => {
-          const done = h.subtasks.filter((s) => s.done).length;
-          const full = done === h.subtasks.length && h.subtasks.length;
-          return (
-            <div key={h.id} className={full ? "panel habit full" : "panel habit"}>
-              <div className="panel-head">
-                <div className="panel-title">{full ? <Check size={14} color="var(--teal)" /> : null} {h.name}</div>
-                <span className="count">{done}/{h.subtasks.length}</span>
-              </div>
-              <div className="sub-list">
-                {h.subtasks.map((s) => (
-                  <button key={s.id} className={s.done ? "subtask on" : "subtask"} onClick={() => toggleSub(h.id, s.id)}>
-                    <span className="sbox">{s.done && <Check size={11} />}</span>{s.name}
-                  </button>
-                ))}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    );
-  }
-
-  function renderNutrition() {
-    const tMeals = os.meals;
-    const cals = tMeals.reduce((a, b) => a + b.calories, 0);
-    const pro = tMeals.reduce((a, b) => a + b.protein, 0);
-    return (
-      <div>
-        <div className="macro-row">
-          <div className="macro"><div className="macro-num mono">{cals}</div><div className="macro-lab">calories today</div></div>
-          <div className="macro"><div className="macro-num mono">{pro}g</div><div className="macro-lab">protein today</div></div>
-          <div className="macro"><div className="macro-num mono">{tMeals.length}</div><div className="macro-lab">meals logged</div></div>
-        </div>
-        <div className="note-add" style={{ margin: "14px 0" }}>
-          <input className="inp" placeholder="What did you eat? e.g. chicken and rice" value={mealText} onChange={(e) => setMealText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") logMeal(); }} />
-          <button className="solid-btn wide" onClick={logMeal} disabled={mealLoading}>{mealLoading ? <Loader2 size={14} className="spin" /> : <Sparkles size={14} />} Log</button>
-        </div>
+      <div style={{ maxWidth: 1200 }}>
+        <div className="view-head"><h1>Schedule</h1></div>
         <div className="panel">
-          {tMeals.length === 0 && <div className="empty">No meals yet today. Claude estimates calories and protein for you.</div>}
-          <div className="list">
-            {tMeals.map((m) => (
-              <div key={m.id} className="row meal">
-                <span className="meal-time mono">{m.time}</span>
-                <span className="row-title">{m.name}</span>
-                <span className="meal-mac mono">{m.calories} kcal · {m.protein}g</span>
-              </div>
-            ))}
+          <div className="plabel"><Calendar size={13} /> WEEK OF {monday.toLocaleDateString([], { month: "short", day: "numeric" })}
+            <input ref={schedFileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => importSchedShot(e.target.files && e.target.files[0])} />
+            <button className="ghost-btn plan" onClick={() => schedFileRef.current && schedFileRef.current.click()} disabled={impSched}>{impSched ? <Loader2 size={12} className="spin" /> : <Camera size={12} />} Import screenshot</button>
           </div>
+          <WeekCalendar days={days} events={os.events} now={now} onDelete={delEvent} tall />
+          <EventForm days={days} evTitle={evTitle} setEvTitle={setEvTitle} evDay={evDay} setEvDay={setEvDay} evStart={evStart} setEvStart={setEvStart} evEnd={evEnd} setEvEnd={setEvEnd} onAdd={addEvent} defaultDay={isoLocal(now)} />
         </div>
       </div>
     );
   }
 
-  function renderJournal() {
-    return (
-      <div>
-        <div className="panel">
-          <div className="panel-head"><div className="panel-title"><BookOpen size={14} /> Tonight's entry</div></div>
-          <textarea className="ta" placeholder="How was the day? Wins, struggles, what you learned. Speak or type." value={jText} onChange={(e) => setJText(e.target.value)} />
-          <div className="j-actions">
-            <button className={jVoice === "listening" ? "ghost-btn rec" : "ghost-btn"} onClick={() => startVoice((t) => setJText((p) => (p ? p + " " : "") + t), setJVoice)}>
-              <Mic size={14} /> {jVoice === "listening" ? "Listening" : jVoice === "unsupported" ? "Voice n/a" : "Speak"}
-            </button>
-            <button className="solid-btn wide" onClick={saveJournal} disabled={jSaving}>{jSaving ? <Loader2 size={14} className="spin" /> : <Check size={14} />} Save entry</button>
-          </div>
-        </div>
-        <div className="panel" style={{ marginTop: 14 }}>
-          <div className="panel-head"><div className="panel-title">Log</div></div>
-          {os.journal.length === 0 && <div className="empty">Your daily entries build the memory the AI learns from.</div>}
-          {os.journal.map((j) => <JournalRow key={j.id} j={j} />)}
-        </div>
-      </div>
-    );
-  }
-
+  /* ===================== GOALS ===================== */
   function renderGoals() {
     return (
-      <div>
-        <div className="note-add" style={{ marginBottom: 14 }}>
-          <input className="inp" placeholder="New goal" value={goalText} onChange={(e) => setGoalText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { addGoal(goalText, goalScope); setGoalText(""); } }} />
-          <div className="scope-toggle">
-            {["week", "month"].map((s) => <button key={s} className={goalScope === s ? "chip on" : "chip"} onClick={() => setGoalScope(s)}>{s}</button>)}
+      <div style={{ maxWidth: 720 }}>
+        <div className="view-head"><h1>Goals</h1></div>
+        <div className="panel">
+          <div className="plabel"><Target size={13} /> THIS MONTH</div>
+          <GoalList goals={os.goals.filter((g) => g.scope === "month")} onToggle={toggleGoal} onDelete={delGoal} empty="No monthly goals yet." />
+          <div className="cap" style={{ marginTop: 12 }}>
+            <input className="cap-inp" placeholder="Add a monthly goal" value={goalScope === "month" ? goalInput : ""} onFocus={() => setGoalScope("month")} onChange={(e) => setGoalInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { setGoalScope("month"); addGoal(); } }} />
+            <button className="cap-go" onClick={() => { setGoalScope("month"); addGoal(); }}><Plus size={15} /></button>
           </div>
-          <button className="solid-btn" onClick={() => { addGoal(goalText, goalScope); setGoalText(""); }}><Plus size={14} /></button>
         </div>
-        <div className="goals-grid">
-          {["week", "month"].map((sc) => (
-            <div key={sc} className="panel">
-              <div className="panel-head"><div className="panel-title">This {sc}</div></div>
-              {os.goals.filter((g) => g.scope === sc).length === 0 && <div className="empty">No {sc} goals yet.</div>}
-              {os.goals.filter((g) => g.scope === sc).map((g) => (
-                <div key={g.id} className={g.done ? "goal done full" : "goal full"}>
-                  <span className="goal-box" onClick={() => toggleGoal(g.id)}>{g.done && <Check size={11} />}</span>
-                  <span style={{ flex: 1 }} onClick={() => toggleGoal(g.id)}>{g.text}</span>
-                  <button className="icon-btn faint" onClick={() => delGoal(g.id)}><X size={13} /></button>
-                </div>
-              ))}
-            </div>
-          ))}
+        <div className="panel" style={{ marginTop: 14 }}>
+          <div className="plabel"><Check size={13} /> THIS WEEK</div>
+          <GoalList goals={os.goals.filter((g) => g.scope === "week")} onToggle={toggleGoal} onDelete={delGoal} empty="No weekly goals yet." />
+          <div className="cap" style={{ marginTop: 12 }}>
+            <input className="cap-inp" placeholder="Add a weekly goal" value={goalScope === "week" ? goalInput : ""} onFocus={() => setGoalScope("week")} onChange={(e) => setGoalInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { setGoalScope("week"); addGoal(); } }} />
+            <button className="cap-go" onClick={() => { setGoalScope("week"); addGoal(); }}><Plus size={15} /></button>
+          </div>
         </div>
       </div>
     );
   }
 
-  function renderFinance() {
-    const spent = os.spend?.spent || 0;
-    const limit = os.spend?.limit || 4928;
-    const remaining = limit - spent;
-    const pctSpent = limit ? Math.min(100, (spent / limit) * 100) : 0;
-    const status = pctSpent >= 100 ? "over" : pctSpent >= 85 ? "warn" : "ok";
-    const statusColor = status === "over" ? "var(--accent)" : status === "warn" ? "var(--gold)" : "var(--accent)";
-    const barColor = status === "over" ? "#e2544f" : status === "warn" ? "var(--gold)" : "var(--accent)";
-    const history = (os.spend?.history || []).map((h) => ({ value: h.spent }));
+  /* ===================== HEALTH ===================== */
+  function renderHealth() {
+    const nut = os.nutrition;
+    const pPct = nut.proteinGoal ? Math.min(100, Math.round((nut.protein / nut.proteinGoal) * 100)) : 0;
     return (
-      <div style={{ maxWidth: 640 }}>
+      <div style={{ maxWidth: 720 }}>
+        <div className="view-head"><h1>Health</h1></div>
         <div className="panel">
-          <div className="plabel"><span className="num">08</span> MONTHLY SPEND <span className="pcount mono">{os.spend?.month}</span></div>
-          <div className="net big mono" style={{ color: barColor }}>${spent.toLocaleString()}</div>
-          <div className="net-label">of ${limit.toLocaleString()} limit</div>
-          <div className="spend-bar"><span style={{ width: pctSpent + "%", background: barColor }} /></div>
-          <div className="spend-foot mono">
-            <span style={{ color: barColor }}>{Math.round(pctSpent)}% used</span>
-            <span>{remaining >= 0 ? `$${remaining.toLocaleString()} left` : `$${Math.abs(remaining).toLocaleString()} over`}</span>
+          <div className="plabel"><Activity size={13} /> TODAY</div>
+          <div className="nut-ring-wrap big">
+            <div className="ring-holder"><Ring pct={pPct} size={120} stroke={11} /><div className="ring-center"><div className="ring-pct mono">{pPct}%</div><div className="ring-cap">of {nut.proteinGoal}g</div></div></div>
+            <div className="nut-figs">
+              <div className="nut-line"><span className="mono big">{nut.protein}</span><span className="nut-unit">/ {nut.proteinGoal} g protein</span></div>
+              <div className="nut-line"><span className="mono big">{nut.calories}</span><span className="nut-unit">kcal</span></div>
+              <div className="sub-label" style={{ margin: "14px 0 6px" }}>Daily protein goal</div>
+              <div className="note-add">
+                <input className="inp" inputMode="numeric" style={{ maxWidth: 110 }} placeholder={`${nut.proteinGoal}`} value={proteinInput} onChange={(e) => setProteinInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { setProteinGoal(proteinInput); setProteinInput(""); } }} />
+                <button className="ghost-btn" onClick={() => { setProteinGoal(proteinInput); setProteinInput(""); }}>Set goal</button>
+              </div>
+            </div>
           </div>
         </div>
 
         <div className="panel" style={{ marginTop: 14 }}>
-          <div className="plabel"><span className="num">09</span> UPDATE</div>
+          <div className="plabel"><Plus size={13} /> LOG A MEAL <span className="pcount mono">claude estimates macros</span></div>
+          <div className="cap">
+            <input className="cap-inp" placeholder="e.g. grilled chicken bowl with rice and beans" value={mealText} onChange={(e) => setMealText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addMeal(); }} />
+            <button className="cap-go" onClick={addMeal} disabled={mealLoading}>{mealLoading ? <Loader2 size={14} className="spin" /> : <Plus size={15} />}</button>
+          </div>
+          <div className="list" style={{ marginTop: 10 }}>
+            {os.meals.map((m) => (
+              <div key={m.id} className="row">
+                <span className="row-title">{m.name}</span>
+                <span className="mono meal-macro">{m.protein}g P</span>
+                <span className="mono meal-macro faint">{m.calories} kcal</span>
+              </div>
+            ))}
+            {os.meals.length === 0 && <div className="empty">No meals logged today.</div>}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  /* ===================== FINANCES ===================== */
+  function renderFinances() {
+    const { spent, limit } = os.spend;
+    const remaining = limit - spent;
+    const pct = limit ? Math.min(100, (spent / limit) * 100) : 0;
+    const over = pct >= 100, warn = pct >= 85;
+    const bar = over ? "#e2544f" : warn ? "var(--gold)" : "var(--accent)";
+    return (
+      <div style={{ maxWidth: 640 }}>
+        <div className="view-head"><h1>Finances</h1></div>
+        <div className="panel">
+          <div className="plabel"><Wallet size={13} /> MONTHLY SPEND <span className="pcount mono">{os.spend.month}</span></div>
+          <div className="net big mono" style={{ color: bar }}>${spent.toLocaleString()}</div>
+          <div className="net-label">of ${limit.toLocaleString()} limit</div>
+          <div className="spend-bar"><span style={{ width: pct + "%", background: bar }} /></div>
+          <div className="spend-foot mono"><span style={{ color: bar }}>{Math.round(pct)}% used</span><span>{remaining >= 0 ? `$${remaining.toLocaleString()} left` : `$${Math.abs(remaining).toLocaleString()} over`}</span></div>
+        </div>
+        <div className="panel" style={{ marginTop: 14 }}>
+          <div className="plabel"><Plus size={13} /> UPDATE</div>
           <input ref={spendFileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => importSpendShot(e.target.files && e.target.files[0])} />
-          <button className="solid-btn wide" style={{ marginBottom: 14 }} onClick={() => spendFileRef.current && spendFileRef.current.click()} disabled={impSpend}>
-            {impSpend ? <Loader2 size={14} className="spin" /> : <Camera size={14} />} Import statement screenshot
-          </button>
+          <button className="solid-btn wide" style={{ marginBottom: 14 }} onClick={() => spendFileRef.current && spendFileRef.current.click()} disabled={impSpend}>{impSpend ? <Loader2 size={14} className="spin" /> : <Camera size={14} />} Import statement screenshot</button>
           <div className="sub-label">Month to date spend</div>
           <div className="note-add">
             <input className="inp" inputMode="decimal" placeholder={`Current spend, e.g. ${spent}`} value={spentInput} onChange={(e) => setSpentInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { setSpend(spentInput); setSpentInput(""); } }} />
@@ -680,340 +426,307 @@ export default function Dashboard() {
             <button className="ghost-btn" onClick={() => { setLimit(limitInput); setLimitInput(""); }}>Set limit</button>
           </div>
         </div>
-
-        {history.length >= 2 && (
-          <div className="panel" style={{ marginTop: 14 }}>
-            <div className="plabel"><span className="num">10</span> TREND</div>
-            <Spark history={history.slice(0, -1)} current={spent} big />
-          </div>
-        )}
       </div>
     );
   }
 
-  const VIEWS = { home: renderHome, crm: renderCrm, brain: renderBrain, habits: renderHabits, nutrition: renderNutrition, journal: renderJournal, goals: renderGoals, finance: renderFinance };
-  const title = NAV.find((n) => n.id === view)?.label;
+  /* ===================== JOURNAL ===================== */
+  function renderJournal() {
+    return (
+      <div style={{ maxWidth: 720 }}>
+        <div className="view-head"><h1>Journal</h1></div>
+        <div className="panel">
+          <div className="plabel"><BookOpen size={13} /> TONIGHT'S REFLECTION <span className="pcount mono">feeds your advice</span></div>
+          <textarea className="mk-input" rows={4} placeholder="How did today go? What worked, what slipped, what is on your mind for tomorrow?" value={jText} onChange={(e) => setJText(e.target.value)} />
+          <div className="cap" style={{ marginTop: 10 }}>
+            <button className={jVoice === "listening" ? "cap-mic rec" : "cap-mic"} onClick={jMic}><Mic size={16} /></button>
+            <button className="cap-go" onClick={saveJournal} disabled={jSaving} style={{ marginLeft: "auto" }}>{jSaving ? <Loader2 size={14} className="spin" /> : "Save reflection"}</button>
+          </div>
+        </div>
+        <div className="panel" style={{ marginTop: 14 }}>
+          <div className="plabel"><ChevronRight size={13} /> PAST ENTRIES</div>
+          <div className="jlist">
+            {os.journal.map((j) => (
+              <div key={j.id} className="jentry">
+                <div className="jdate mono">{j.date}</div>
+                {j.summary && <div className="jsum">{j.summary}</div>}
+                <div className="jbody">{j.text}</div>
+              </div>
+            ))}
+            {os.journal.length === 0 && <div className="empty">Your reflections will show up here.</div>}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <>
-      <Style />
-      <div className="os">
-        <header className="topbar">
-          <div className="brand"><span className="brand-mark" /><span className="brand-name">HAYDEN OS</span><span className="brand-ver">// V1</span></div>
-          <nav className="topnav">
-            {NAV.map((n) => (
-              <button key={n.id} className={view === n.id ? "tab on" : "tab"} onClick={() => { setView(n.id); setBrainCat(null); }}>{n.label}</button>
-            ))}
-          </nav>
-          <div className="topstat">
-            <span className="ts-date">{now.toLocaleDateString([], { month: "short", day: "2-digit", year: "numeric" }).toUpperCase()}</span>
-            <span className="ts-time">{now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false })}</span>
-            <span className="ts-live"><span className="dot" /> LIVE</span>
-          </div>
-        </header>
-
-        <main className="os-main">
-          {view !== "home" && <div className="view-head"><h1>{title}</h1></div>}
-          <div className="view-body">{VIEWS[view]()}</div>
-        </main>
-
-        {toast && <div className="toast">{toast}</div>}
+    <div className="os">
+      <div className="topbar">
+        <div className="brand"><div className="brand-mark" /><span className="brand-name">HAYDEN<span style={{ color: "var(--accent)" }}>OS</span></span></div>
+        <div className="topnav">
+          {TABS.map((t) => { const I = t.icon; return (<button key={t.id} className={view === t.id ? "tab on" : "tab"} onClick={() => setView(t.id)}><I size={13} style={{ marginRight: 6, verticalAlign: "-2px" }} />{t.label}</button>); })}
+        </div>
+        <div className="topstat"><span className="ts-time">{now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span><span className="ts-live"><span className="dot" /> live</span></div>
       </div>
-    </>
+      <div className="os-main">{VIEWS[view]()}</div>
+      {toast && <div className="toast">{toast}</div>}
+      <Style />
+    </div>
   );
 }
 
-/* ---------- pieces ---------- */
-function SpendPanel({ spent, limit, history }) {
+/* ===================== SUBCOMPONENTS ===================== */
+function Ring({ pct, size = 92, stroke = 9, color = "var(--accent)" }) {
+  const r = (size - stroke) / 2, c = 2 * Math.PI * r, off = c * (1 - Math.min(1, (pct || 0) / 100));
+  return (
+    <svg width={size} height={size} className="ring">
+      <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="var(--bg3)" strokeWidth={stroke} />
+      <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={color} strokeWidth={stroke} strokeLinecap="round" strokeDasharray={c} strokeDashoffset={off} transform={`rotate(-90 ${size / 2} ${size / 2})`} style={{ transition: "stroke-dashoffset .5s ease" }} />
+    </svg>
+  );
+}
+
+function SpendPanel({ spend }) {
+  const { spent, limit } = spend;
+  const pct = limit ? Math.min(100, (spent / limit) * 100) : 0;
+  const over = pct >= 100, warn = pct >= 85;
+  const bar = over ? "#e2544f" : warn ? "var(--gold)" : "var(--accent)";
   const remaining = limit - spent;
-  const pctSpent = limit ? Math.min(100, (spent / limit) * 100) : 0;
-  const over = pctSpent >= 100, warn = pctSpent >= 85;
-  const barColor = over ? "#e2544f" : warn ? "var(--gold)" : "var(--accent)";
   return (
     <div className="panel">
-      <div className="plabel"><span className="num">0S</span> SPEND <span className="pcount mono">MONTH</span></div>
-      <div className="net mono" style={{ color: barColor }}>${spent.toLocaleString()}</div>
-      <div className="net-label">of ${limit.toLocaleString()} limit</div>
-      <div className="spend-bar"><span style={{ width: pctSpent + "%", background: barColor }} /></div>
-      <div className="spend-foot mono">
-        <span style={{ color: barColor }}>{Math.round(pctSpent)}%</span>
-        <span>{remaining >= 0 ? `$${remaining.toLocaleString()} left` : `$${Math.abs(remaining).toLocaleString()} over`}</span>
+      <div className="plabel"><Wallet size={13} /> SPEND <span className="pcount mono">MONTH</span></div>
+      <div className="net mono" style={{ color: bar }}>${spent.toLocaleString()}</div>
+      <div className="net-label">of ${limit.toLocaleString()}</div>
+      <div className="spend-bar"><span style={{ width: pct + "%", background: bar }} /></div>
+      <div className="spend-foot mono"><span style={{ color: bar }}>{Math.round(pct)}%</span><span>{remaining >= 0 ? `$${remaining.toLocaleString()} left` : `$${Math.abs(remaining).toLocaleString()} over`}</span></div>
+    </div>
+  );
+}
+
+function GoalList({ goals, onToggle, onDelete, empty }) {
+  return (
+    <div className="list">
+      {goals.map((g) => (
+        <div key={g.id} className="row">
+          <button className={g.done ? "check on" : "check"} onClick={() => onToggle(g.id, !g.done)}>{g.done && <Check size={13} />}</button>
+          <span className={g.done ? "row-title strike" : "row-title"}>{g.text}</span>
+          <button className="icon-btn faint" onClick={() => onDelete(g.id)}><Trash2 size={12} /></button>
+        </div>
+      ))}
+      {goals.length === 0 && <div className="empty">{empty}</div>}
+    </div>
+  );
+}
+
+function EventForm({ days, evTitle, setEvTitle, evDay, setEvDay, evStart, setEvStart, evEnd, setEvEnd, onAdd, defaultDay }) {
+  const pad2 = (n) => String(n).padStart(2, "0");
+  const dayVal = evDay || defaultDay;
+  return (
+    <div className="ev-form">
+      <input className="inp ev-title" placeholder="New event" value={evTitle} onChange={(e) => setEvTitle(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") onAdd(); }} />
+      <select className="inp ev-sel" value={dayVal} onChange={(e) => setEvDay(e.target.value)}>
+        {days.map((d) => { const v = `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`; return <option key={v} value={v}>{["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][d.getDay()]} {d.getDate()}</option>; })}
+      </select>
+      <input className="inp ev-time" type="time" value={evStart} onChange={(e) => setEvStart(e.target.value)} />
+      <span className="ev-dash">to</span>
+      <input className="inp ev-time" type="time" value={evEnd} onChange={(e) => setEvEnd(e.target.value)} />
+      <button className="solid-btn" onClick={onAdd}><Plus size={14} /></button>
+    </div>
+  );
+}
+
+function WeekCalendar({ days, events, now, onDelete, tall }) {
+  const h = (END_HOUR - START_HOUR) * HOUR_H;
+  const hours = [...Array(END_HOUR - START_HOUR + 1)].map((_, i) => START_HOUR + i);
+  const pad2 = (n) => String(n).padStart(2, "0");
+  const isoOf = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+  const todayIso = isoOf(now);
+  const nowMin = now.getHours() * 60 + now.getMinutes();
+  const nowTop = ((nowMin - START_HOUR * 60) / 60) * HOUR_H;
+  return (
+    <div className={tall ? "cal tall" : "cal"}>
+      <div className="cal-days">
+        <div className="cal-gh" />
+        {days.map((d, i) => (<div key={i} className={isoOf(d) === todayIso ? "cal-dh on" : "cal-dh"}><span className="cal-dow">{DOW[d.getDay()]}</span><span className="cal-dn mono">{d.getDate()}</span></div>))}
+      </div>
+      <div className="cal-body" style={{ height: h }}>
+        <div className="cal-gutter">
+          {hours.map((hr) => (<div key={hr} className="cal-hr" style={{ height: HOUR_H }}><span>{minLabel(hr * 60)}</span></div>))}
+        </div>
+        <div className="cal-cols">
+          {days.map((d, i) => {
+            const dayIso = isoOf(d);
+            const evs = events.filter((e) => e.day === dayIso);
+            return (
+              <div key={i} className="cal-col">
+                {hours.slice(0, -1).map((hr) => <div key={hr} className="cal-slot" style={{ height: HOUR_H }} />)}
+                {dayIso === todayIso && nowTop >= 0 && nowTop <= h && <div className="cal-now" style={{ top: nowTop }} />}
+                {evs.map((e) => {
+                  const top = Math.max(0, ((e.startMin - START_HOUR * 60) / 60) * HOUR_H);
+                  const height = Math.max(18, ((e.endMin - e.startMin) / 60) * HOUR_H - 2);
+                  return (
+                    <button key={e.id} className="cal-ev" style={{ top, height }} onClick={() => onDelete(e.id)} title="Tap to delete">
+                      <span className="cal-ev-t mono">{minLabel(e.startMin)}</span>
+                      <span className="cal-ev-title">{e.title}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            );
+          })}
+        </div>
       </div>
     </div>
   );
 }
 
-function Ring({ pct }) {
-  const r = 46, c = 2 * Math.PI * r, off = c - (pct / 100) * c;
-  return (
-    <svg width="120" height="120" viewBox="0 0 120 120" className="ring">
-      <circle cx="60" cy="60" r={r} stroke="var(--bg3)" strokeWidth="9" fill="none" />
-      <circle cx="60" cy="60" r={r} stroke="var(--teal)" strokeWidth="9" fill="none" strokeLinecap="round" strokeDasharray={c} strokeDashoffset={off} transform="rotate(-90 60 60)" style={{ transition: "stroke-dashoffset .5s ease" }} />
-      <text x="60" y="58" textAnchor="middle" className="ring-num">{pct}%</text>
-      <text x="60" y="76" textAnchor="middle" className="ring-sub">today</text>
-    </svg>
-  );
-}
-
-function Spark({ history, current, big }) {
-  const pts = [...(history || []).map((h) => h.value), current];
-  if (pts.length < 2) return <div className="spark-empty">Log two months to see the trend.</div>;
-  const w = 260, h = big ? 70 : 46, min = Math.min(...pts), max = Math.max(...pts), span = max - min || 1;
-  const step = w / (pts.length - 1);
-  const line = pts.map((v, i) => `${i === 0 ? "M" : "L"}${(i * step).toFixed(1)},${(h - ((v - min) / span) * (h - 10) - 5).toFixed(1)}`).join(" ");
-  const area = `${line} L${w},${h} L0,${h} Z`;
-  return (
-    <svg width="100%" viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" className="spark">
-      <defs><linearGradient id="sparkg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="var(--accent)" stopOpacity="0.35" /><stop offset="1" stopColor="var(--accent)" stopOpacity="0" /></linearGradient></defs>
-      <path d={area} fill="url(#sparkg)" stroke="none" />
-      <path d={line} fill="none" stroke="var(--accent)" strokeWidth="1.75" />
-    </svg>
-  );
-}
-
-function JournalRow({ j }) {
-  const [raw, setRaw] = useState(false);
-  return (
-    <div className="j-row">
-      <div className="j-top">
-        <span className="j-date mono">{j.date}</span>
-        <button className="link-btn" onClick={() => setRaw((r) => !r)}>{raw ? "hide raw" : "show raw"}</button>
-      </div>
-      <div className="j-sum">{j.summary}</div>
-      {raw && <div className="j-raw">{j.text}</div>}
-    </div>
-  );
-}
-
-/* ---------- styles ---------- */
 function Style() {
   return (
     <style>{`
-@import url('https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400;1,6..72,500&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
 :root{
   --bg:#05080d; --bg2:#0a0f16; --bg3:#10161f; --line:#182029; --line2:#232d38;
   --text:#e6ecf2; --muted:#7b8794; --faint:#4b5563;
   --accent:#35d6be; --accent2:#2bb89f; --gold:#d9b46a; --blue:#5a93d4;
-  --accent-dim:rgba(53,214,190,.12); --accent-dim2:rgba(53,214,190,.06); --gold-dim:rgba(217,180,106,.12);
+  --accent-dim:rgba(53,214,190,.12); --accent-dim2:rgba(53,214,190,.06);
   --sans:'Inter',system-ui,sans-serif; --serif:'Newsreader',Georgia,serif; --mono:'JetBrains Mono',ui-monospace,monospace;
 }
 *{box-sizing:border-box}
 .os{min-height:100vh;background:radial-gradient(1200px 600px at 70% -10%,rgba(53,214,190,.05),transparent),var(--bg);color:var(--text);font-family:var(--sans);font-size:14px;display:flex;flex-direction:column}
-.os .mono{font-family:var(--mono)}
-.os .serif{font-family:var(--serif)}
-.os.boot{align-items:center;justify-content:center;gap:12px;color:var(--muted)}
+.os .mono{font-family:var(--mono)} .os .faint{color:var(--faint)}
+.os.boot{align-items:center;justify-content:center;flex-direction:row;gap:12px;color:var(--muted)}
 .spin{animation:spin 1s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
 
-/* top bar */
 .topbar{display:flex;align-items:center;gap:22px;padding:0 22px;height:52px;background:rgba(8,12,18,.85);backdrop-filter:blur(8px);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:20}
 .brand{display:flex;align-items:center;gap:8px;flex:none}
 .brand-mark{width:11px;height:11px;border-radius:3px;background:linear-gradient(135deg,var(--accent),var(--accent2));box-shadow:0 0 12px var(--accent-dim)}
 .brand-name{font-family:var(--mono);font-weight:500;font-size:13px;letter-spacing:.14em}
-.brand-ver{font-family:var(--mono);font-size:11px;color:var(--faint);letter-spacing:.1em}
 .topnav{display:flex;gap:2px;flex:1;overflow-x:auto}
-.tab{background:none;border:none;color:var(--muted);font-family:var(--mono);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;padding:8px 12px;border-radius:6px;cursor:pointer;white-space:nowrap;transition:.15s}
+.tab{background:none;border:none;color:var(--muted);font-family:var(--mono);font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;padding:8px 12px;border-radius:6px;cursor:pointer;white-space:nowrap;transition:.15s}
 .tab:hover{color:var(--text)}
 .tab.on{color:var(--text);background:var(--accent-dim);box-shadow:inset 0 -2px 0 var(--accent)}
 .topstat{display:flex;align-items:center;gap:14px;flex:none;font-family:var(--mono);font-size:11px;letter-spacing:.08em;color:var(--muted)}
-.ts-time{color:var(--text)}
-.ts-live{display:flex;align-items:center;gap:6px;color:var(--accent)}
-.ts-live .dot,.live .dot{width:6px;height:6px;border-radius:50%;background:var(--accent);box-shadow:0 0 8px var(--accent)}
+.ts-time{color:var(--text)} .ts-live{display:flex;align-items:center;gap:6px;color:var(--accent)}
+.ts-live .dot{width:6px;height:6px;border-radius:50%;background:var(--accent);box-shadow:0 0 8px var(--accent)}
 
-/* main */
-.os-main{flex:1;min-width:0;padding:18px 22px 40px;max-width:1500px;width:100%;margin:0 auto}
-.view-head{padding:6px 2px 16px}
-.view-head h1{margin:0;font-family:var(--serif);font-weight:500;font-size:26px;letter-spacing:-.01em}
-
-/* columns */
-.cols{display:grid;grid-template-columns:320px minmax(0,1fr) 320px;gap:14px;align-items:start}
-.col{display:flex;flex-direction:column;gap:14px;min-width:0}
-
-/* panel */
-.panel{background:linear-gradient(var(--bg2),var(--bg2)) padding-box;border:1px solid var(--line);border-radius:12px;padding:16px}
-.plabel{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted);margin-bottom:14px}
-.plabel .num{color:var(--accent);opacity:.8}
-.plabel .live{margin-left:auto;display:flex;align-items:center;gap:6px;color:var(--accent);letter-spacing:.1em}
-.pcount{margin-left:auto;color:var(--faint);letter-spacing:.08em}
-.empty{color:var(--faint);font-size:13px;padding:6px 2px;line-height:1.5}
-
-/* legacy panel head/title (other views) */
-.panel-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
-.panel-title{display:flex;align-items:center;gap:7px;font-family:var(--mono);font-weight:500;font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--text)}
-.panel-title svg{color:var(--accent)}
-.count{font-family:var(--mono);font-size:11px;color:var(--muted);background:var(--bg3);padding:2px 8px;border-radius:20px}
-.sub-label{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--faint);margin:16px 0 8px;font-family:var(--mono)}
-
-/* operator */
-.op-name{font-family:var(--serif);font-weight:500;font-size:28px;letter-spacing:-.01em;line-height:1.05}
-.op-sub{color:var(--muted);font-size:12.5px;margin-top:5px}
-.op-meta{display:flex;gap:22px;margin-top:16px;padding-top:14px;border-top:1px solid var(--line)}
-.mk{font-family:var(--mono);font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);margin-bottom:5px}
-.mv{font-size:14px;color:var(--text)}
-.mv.serif{font-style:italic;font-size:15px}
-.mv.mono{font-size:16px}
-
-/* session greeting */
-.session{background:radial-gradient(500px 200px at 90% -30%,var(--accent-dim2),transparent),var(--bg2)}
-.greeting{font-family:var(--serif);font-weight:400;font-size:30px;letter-spacing:-.01em;line-height:1.15}
+.os-main{flex:1;min-width:0;padding:18px 22px 48px;max-width:1400px;width:100%;margin:0 auto}
+.view-head{padding:2px 2px 16px}
+.view-head h1{margin:0;font-family:var(--serif);font-weight:500;font-size:27px;letter-spacing:-.01em}
 .g-name{font-style:italic}
 .sess-date{color:var(--muted);font-size:12.5px;margin-top:4px}
-.cap{display:flex;gap:8px;margin-top:16px}
+
+.panel{background:var(--bg2);border:1px solid var(--line);border-radius:12px;padding:16px}
+.plabel{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin-bottom:14px}
+.plabel svg{color:var(--accent)}
+.pcount{margin-left:auto;color:var(--faint);letter-spacing:.08em}
+.empty{color:var(--faint);font-size:13px;padding:8px 2px;line-height:1.5}
+.sub-label{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--faint);margin:14px 0 8px;font-family:var(--mono)}
+
+/* home layout */
+.home{display:flex;flex-direction:column;gap:14px}
+.home-row{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(0,1fr);gap:14px;align-items:start}
+.home-row2{display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start}
+.stack{display:flex;flex-direction:column;gap:14px}
+@media(max-width:920px){.home-row,.home-row2{grid-template-columns:1fr}}
+
+/* master key */
+.mk-panel{background:radial-gradient(600px 200px at 100% -40%,var(--accent-dim2),transparent),var(--bg2)}
+.mk-row{display:flex;gap:10px;align-items:stretch}
+.mk-input{flex:1;background:var(--bg3);border:1px solid var(--line);border-radius:10px;padding:12px 13px;color:var(--text);font-family:var(--sans);font-size:14px;outline:none;resize:vertical;min-height:52px;line-height:1.5}
+.mk-input:focus{border-color:var(--accent)} .mk-input::placeholder{color:var(--faint)}
+.mk-actions{display:flex;flex-direction:column;gap:8px;justify-content:flex-start}
+.mk-reply{margin-top:12px;padding:12px 14px;background:var(--accent-dim2);border:1px solid var(--line);border-left:2px solid var(--accent);border-radius:8px;font-size:14px;line-height:1.55;color:var(--text)}
+
+/* buttons */
+.cap{display:flex;gap:8px}
 .cap-inp{flex:1;background:var(--bg3);border:1px solid var(--line);border-radius:9px;padding:11px 13px;color:var(--text);font-family:var(--sans);font-size:13.5px;outline:none;min-width:0;transition:.15s}
-.cap-inp:focus{border-color:var(--accent)}.cap-inp::placeholder{color:var(--faint)}
+.cap-inp:focus{border-color:var(--accent)} .cap-inp::placeholder{color:var(--faint)}
 .cap-mic{flex:none;width:40px;border-radius:9px;background:var(--bg3);border:1px solid var(--line);color:var(--muted);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:.15s}
-.cap-mic:hover{color:var(--text)}.cap-mic.rec{color:var(--accent);border-color:var(--accent)}
-.cap-go{flex:none;background:var(--accent);color:#04201c;border:none;border-radius:9px;padding:0 16px;font-family:var(--mono);font-size:12px;letter-spacing:.06em;text-transform:uppercase;font-weight:500;cursor:pointer;display:flex;align-items:center;transition:.15s}
-.cap-go:hover{filter:brightness(1.08)}.cap-go:disabled{opacity:.6}
+.cap-mic:hover{color:var(--text)} .cap-mic.rec{color:var(--accent);border-color:var(--accent)}
+.cap-go{flex:none;background:var(--accent);color:#04201c;border:none;border-radius:9px;padding:0 15px;min-height:40px;font-family:var(--mono);font-size:12px;letter-spacing:.06em;text-transform:uppercase;font-weight:500;cursor:pointer;display:flex;align-items:center;gap:4px;justify-content:center;transition:.15s}
+.cap-go:hover{filter:brightness(1.08)} .cap-go:disabled{opacity:.6}
+.ghost-btn{margin-left:auto;background:var(--bg3);border:1px solid var(--line);color:var(--muted);border-radius:7px;padding:5px 10px;font-family:var(--mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;cursor:pointer;display:flex;align-items:center;gap:5px;transition:.15s}
+.ghost-btn:hover{color:var(--text);border-color:var(--line2)} .ghost-btn.plan{color:var(--accent)}
+.solid-btn{background:var(--accent);color:#04201c;border:none;border-radius:8px;padding:9px 14px;font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;font-weight:500;cursor:pointer;display:inline-flex;align-items:center;gap:6px;justify-content:center;transition:.15s}
+.solid-btn:hover{filter:brightness(1.08)} .solid-btn.wide{width:100%}
+.icon-btn{background:none;border:none;color:var(--muted);cursor:pointer;display:flex;padding:4px;border-radius:6px;transition:.12s}
+.icon-btn:hover{color:#e2544f;background:var(--bg3)} .icon-btn.faint{color:var(--faint)}
+.inp{background:var(--bg3);border:1px solid var(--line);border-radius:8px;padding:9px 11px;color:var(--text);font-family:var(--sans);font-size:13px;outline:none}
+.inp:focus{border-color:var(--accent)}
+.note-add{display:flex;gap:8px;align-items:center}
 
-/* finance / spend */
-.net{font-family:var(--mono);font-size:27px;letter-spacing:-.02em}
-.net.big{font-size:38px}
-.net-label{color:var(--muted);font-size:10px;letter-spacing:.12em;text-transform:uppercase;margin:2px 0 10px;font-family:var(--mono)}
-.spend-bar{height:8px;border-radius:5px;background:var(--bg3);overflow:hidden;margin:4px 0 10px}
-.spend-bar span{display:block;height:100%;border-radius:5px;transition:width .4s ease}
-.spend-foot{display:flex;justify-content:space-between;font-size:11.5px;color:var(--muted);letter-spacing:.04em}
-.hidden-net{display:flex;align-items:center;gap:7px;padding:10px 0}
-.hidden-net span{width:30px;height:10px;border-radius:3px;background:repeating-linear-gradient(90deg,var(--bg3),var(--bg3) 4px,var(--bg2) 4px,var(--bg2) 8px)}
-.hidden-label{color:var(--faint);font-size:12px;margin-left:8px}
-.spark{display:block;margin-top:8px}.spark-empty{color:var(--faint);font-size:12px;margin-top:8px}
-
-/* schedule reminder */
-.reminder{display:flex;align-items:center;gap:10px;width:100%;text-align:left;margin-top:12px;background:var(--bg3);border:1px solid var(--line);border-radius:9px;padding:10px 12px;cursor:pointer;color:var(--text);transition:.15s;font-family:var(--sans)}
-.reminder:hover{border-color:var(--line2)}
-.reminder.due{border-color:var(--accent);background:var(--accent-dim)}
-.reminder.done{opacity:.7}
-.rem-box{width:18px;height:18px;border-radius:5px;border:1.5px solid var(--line2);display:flex;align-items:center;justify-content:center;color:var(--accent);flex:none}
-.reminder.done .rem-box{background:var(--accent-dim);border-color:var(--accent)}
-.reminder.due .rem-box{border-color:var(--accent)}
-.rem-text{flex:1;font-size:13px}
-.reminder.done .rem-text{text-decoration:line-through;color:var(--muted)}
-.rem-tag{font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--faint);flex:none}
-.reminder.due .rem-tag{color:var(--accent)}
-
-/* habit cards */
-.habit-cards{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-.hcard{text-align:left;background:var(--bg3);border:1px solid var(--line);border-radius:10px;padding:13px;cursor:pointer;transition:.15s;color:var(--text)}
-.hcard:hover{border-color:var(--line2)}
-.hcard.full{border-color:var(--accent);background:var(--accent-dim2)}
-.hc-top{display:flex;align-items:center;justify-content:space-between;gap:8px}
-.hc-name{font-size:13px;font-weight:500}
-.hc-bar{height:4px;border-radius:3px;background:var(--line);margin:11px 0 8px;overflow:hidden}
-.hc-bar span{display:block;height:100%;background:var(--accent);border-radius:3px;transition:width .4s ease}
-.hc-frac{font-size:11px;color:var(--faint)}
-
-/* calendar */
-.cal-strip{display:grid;grid-template-columns:repeat(7,1fr);gap:6px}
-.cal-day{text-align:center;padding:9px 0;border-radius:8px;border:1px solid var(--line);background:var(--bg3)}
-.cal-day.on{border-color:var(--accent);background:var(--accent-dim)}
-.cal-dow{font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;color:var(--faint)}
-.cal-day.on .cal-dow{color:var(--accent)}
-.cal-num{font-size:15px;margin-top:3px}
-.cal-agenda{margin-top:12px;padding-top:12px;border-top:1px solid var(--line)}
-
-/* nutrition summary */
-.nut-big{font-size:34px;letter-spacing:-.02em;display:flex;align-items:baseline;gap:6px}
-.nut-unit{font-size:12px;color:var(--muted);letter-spacing:0}
-.nut-sub{font-size:12px;color:var(--muted);margin-top:2px}
-
-/* rows / lists */
+/* rows */
 .list{display:flex;flex-direction:column;gap:2px}
-.row{display:flex;align-items:center;gap:10px;padding:9px 8px;border-radius:8px;transition:.12s}
+.row{display:flex;align-items:center;gap:10px;padding:9px 6px;border-radius:8px;transition:.12s}
 .row:hover{background:var(--bg3)}
 .row-title{flex:1;font-size:13.5px;line-height:1.4;min-width:0}
 .strike{color:var(--faint);text-decoration:line-through}
 .check{flex:none;width:20px;height:20px;border-radius:6px;border:1.5px solid var(--line2);background:none;color:transparent;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:.15s}
-.check:hover{border-color:var(--accent);color:var(--accent)}
-.check.on{border-color:var(--accent);background:var(--accent-dim);color:var(--accent)}
-.star{flex:none;background:none;border:none;color:var(--faint);cursor:pointer;display:flex;padding:2px}
-.star:hover{color:var(--gold)}.star.on{color:var(--gold)}.star.on svg{fill:var(--gold)}
-.pill{font-size:10px;font-weight:500;border:1px solid;border-radius:20px;padding:2px 9px;text-transform:capitalize;flex:none;font-family:var(--mono);letter-spacing:.04em}
-.tag{font-size:10.5px;color:var(--muted);background:var(--bg3);padding:2px 9px;border-radius:6px;flex:none;font-family:var(--mono)}
-.dot-pri{width:7px;height:7px;border-radius:50%;flex:none}
-.icon-btn{background:none;border:none;color:var(--muted);cursor:pointer;display:flex;padding:5px;border-radius:6px;transition:.12s}
-.icon-btn:hover{color:var(--text);background:var(--bg3)}.icon-btn.faint{color:var(--faint)}
-.ghost-btn{display:flex;align-items:center;gap:6px;background:var(--bg3);border:1px solid var(--line);color:var(--text);font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;padding:6px 11px;border-radius:8px;cursor:pointer;transition:.15s}
-.ghost-btn:hover{border-color:var(--line2)}.ghost-btn:disabled{opacity:.6}.ghost-btn.rec{color:var(--accent);border-color:var(--accent)}
-.ghost-btn.sm{margin-left:auto;padding:4px 9px;font-size:10px}
-.solid-btn{display:flex;align-items:center;gap:6px;background:var(--accent);color:#04201c;border:none;font-weight:500;font-family:var(--mono);font-size:12px;letter-spacing:.05em;text-transform:uppercase;padding:9px 13px;border-radius:9px;cursor:pointer;flex:none;transition:.15s}
-.solid-btn.wide{padding:9px 16px}.solid-btn:hover{filter:brightness(1.06)}.solid-btn:disabled{opacity:.6}
+.check:hover{border-color:var(--accent);color:var(--accent)} .check.on{border-color:var(--accent);background:var(--accent-dim);color:var(--accent)}
+.pin-btn{flex:none;background:none;border:none;color:var(--faint);cursor:pointer;display:flex;padding:3px;border-radius:6px;transition:.12s}
+.pin-btn:hover{color:var(--muted)} .pin-btn.on{color:var(--gold)}
+.tag-pin{display:flex;align-items:center;gap:4px;font-family:var(--mono);font-size:9px;letter-spacing:.08em;text-transform:uppercase;color:var(--gold);flex:none}
 
-/* advice */
-.advice p{margin:0 0 7px;font-size:13.5px;line-height:1.55;color:var(--text)}.advice p:last-child{margin:0}
+/* nutrition */
+.nut-ring-wrap{display:flex;align-items:center;gap:16px}
+.nut-ring-wrap.big{gap:22px}
+.ring-holder{position:relative;flex:none;display:flex;align-items:center;justify-content:center}
+.ring-center{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
+.ring-pct{font-size:19px;color:var(--text)} .ring-cap{font-size:8.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--faint);font-family:var(--mono)}
+.nut-figs{display:flex;flex-direction:column;gap:8px;min-width:0}
+.nut-line{display:flex;align-items:baseline;gap:7px}
+.nut-line .big{font-size:24px;letter-spacing:-.02em;color:var(--text)}
+.nut-unit{font-size:12px;color:var(--muted)}
+.meal-macro{font-size:11.5px;color:var(--muted);flex:none}
 
-/* goals */
-.goal-block{margin-bottom:16px}.goal-block:last-child{margin-bottom:0}
-.goals-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}
-.goal-scope{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--faint);margin-bottom:9px;font-family:var(--mono)}
-.goal{display:flex;align-items:center;gap:9px;font-size:13px;padding:6px 0;color:var(--muted);cursor:pointer}
-.goal.full{padding:8px 0}.goal:hover{color:var(--text)}
-.goal.done{color:var(--faint);text-decoration:line-through}
-.goal-box{width:17px;height:17px;border-radius:5px;border:1.5px solid var(--line2);display:flex;align-items:center;justify-content:center;color:var(--accent);flex:none}
-.goal.done .goal-box{background:var(--accent-dim);border-color:var(--accent)}
+/* finance */
+.net{font-family:var(--mono);font-size:27px;letter-spacing:-.02em} .net.big{font-size:38px}
+.net-label{color:var(--muted);font-size:10px;letter-spacing:.12em;text-transform:uppercase;margin:2px 0 10px;font-family:var(--mono)}
+.spend-bar{height:8px;border-radius:5px;background:var(--bg3);overflow:hidden;margin:4px 0 10px}
+.spend-bar span{display:block;height:100%;border-radius:5px;transition:width .4s ease}
+.spend-foot{display:flex;justify-content:space-between;font-size:11.5px;color:var(--muted);letter-spacing:.04em}
 
-/* chips */
-.chips{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:14px}
-.chip{background:var(--bg2);border:1px solid var(--line);color:var(--muted);font-family:var(--mono);font-size:11px;letter-spacing:.04em;padding:6px 12px;border-radius:20px;cursor:pointer;transition:.15s}
-.chip:hover{color:var(--text)}.chip.on{background:var(--accent-dim);border-color:var(--accent);color:var(--text)}
-.scope-toggle{display:flex;gap:5px}
+/* calendar */
+.cal{border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--bg)}
+.cal-days{display:grid;grid-template-columns:52px repeat(7,1fr);border-bottom:1px solid var(--line)}
+.cal-gh{border-right:1px solid var(--line)}
+.cal-dh{display:flex;flex-direction:column;align-items:center;gap:1px;padding:7px 0;border-right:1px solid var(--line)}
+.cal-dh:last-child{border-right:none}
+.cal-dh.on{background:var(--accent-dim)}
+.cal-dow{font-family:var(--mono);font-size:9px;letter-spacing:.1em;color:var(--faint)}
+.cal-dh.on .cal-dow{color:var(--accent)}
+.cal-dn{font-size:14px}
+.cal-body{display:grid;grid-template-columns:52px 1fr;overflow-y:auto}
+.cal.tall .cal-body{max-height:none}
+.cal-gutter{border-right:1px solid var(--line)}
+.cal-hr{position:relative;border-bottom:1px dashed transparent}
+.cal-hr span{position:absolute;top:-7px;right:6px;font-family:var(--mono);font-size:9px;color:var(--faint)}
+.cal-cols{display:grid;grid-template-columns:repeat(7,1fr);position:relative}
+.cal-col{position:relative;border-right:1px solid var(--line)}
+.cal-col:last-child{border-right:none}
+.cal-slot{border-bottom:1px solid var(--line)}
+.cal-now{position:absolute;left:0;right:0;height:2px;background:#e2544f;z-index:3;box-shadow:0 0 6px rgba(226,84,79,.6)}
+.cal-ev{position:absolute;left:3px;right:3px;background:var(--accent-dim);border:1px solid var(--accent);border-left:3px solid var(--accent);border-radius:6px;padding:3px 6px;text-align:left;cursor:pointer;overflow:hidden;display:flex;flex-direction:column;gap:1px;z-index:2;transition:.12s}
+.cal-ev:hover{background:rgba(53,214,190,.2)}
+.cal-ev-t{font-size:8.5px;color:var(--accent);letter-spacing:.02em}
+.cal-ev-title{font-size:11px;color:var(--text);line-height:1.15;overflow:hidden;text-overflow:ellipsis}
 
-/* brain */
-.brain-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
-.brain-tile{position:relative;text-align:left;background:var(--bg2);border:1px solid var(--line);border-radius:12px;padding:18px 16px;cursor:pointer;transition:.15s;color:var(--text)}
-.brain-tile:hover{border-color:var(--accent);transform:translateY(-2px)}
-.tile-name{font-family:var(--serif);font-weight:500;font-size:17px}
-.tile-meta{color:var(--faint);font-size:11px;margin-top:6px;font-family:var(--mono);letter-spacing:.04em}
-.tile-arrow{position:absolute;top:18px;right:14px;color:var(--faint)}
-.back{display:flex;align-items:center;gap:5px;background:none;border:none;color:var(--muted);cursor:pointer;font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:12px;padding:4px 0}
-.back:hover{color:var(--text)}
-.note-add{display:flex;gap:8px;align-items:center}
-.inp{flex:1;background:var(--bg3);border:1px solid var(--line);border-radius:8px;padding:9px 12px;color:var(--text);font-family:var(--sans);font-size:13px;outline:none}
-.inp:focus{border-color:var(--accent)}.inp::placeholder{color:var(--faint)}
-.row.note{background:var(--bg3);margin-top:4px}
-
-/* habits page */
-.habit-stack{display:flex;flex-direction:column;gap:12px}
-.habit.full{border-color:var(--accent)}
-.sub-list{display:flex;flex-wrap:wrap;gap:8px}
-.subtask{display:flex;align-items:center;gap:8px;background:var(--bg3);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--muted);font-family:var(--sans);font-size:13px;cursor:pointer;transition:.15s}
-.subtask:hover{color:var(--text);border-color:var(--line2)}
-.subtask.on{color:var(--text);border-color:var(--accent)}
-.sbox{width:16px;height:16px;border-radius:5px;border:1.5px solid var(--line2);display:flex;align-items:center;justify-content:center;color:var(--accent);flex:none}
-.subtask.on .sbox{background:var(--accent-dim);border-color:var(--accent)}
-
-/* nutrition page */
-.macro-row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
-.macro{background:var(--bg2);border:1px solid var(--line);border-radius:12px;padding:16px;text-align:center}
-.macro-num{font-size:26px;letter-spacing:-.02em;font-family:var(--mono)}
-.macro-lab{color:var(--faint);font-size:10px;letter-spacing:.1em;text-transform:uppercase;margin-top:4px;font-family:var(--mono)}
-.row.meal{background:var(--bg2);border:1px solid var(--line);margin-bottom:6px;border-radius:9px}
-.meal-time{font-size:11px;color:var(--faint);flex:none;width:54px}
-.meal-mac{font-size:11.5px;color:var(--muted);flex:none}
+/* event form */
+.ev-form{display:flex;gap:8px;align-items:center;margin-top:12px;flex-wrap:wrap}
+.ev-title{flex:1;min-width:140px}
+.ev-sel{min-width:88px} .ev-time{width:118px}
+.ev-dash{color:var(--faint);font-size:12px}
 
 /* journal */
-.ta{width:100%;min-height:120px;background:var(--bg3);border:1px solid var(--line);border-radius:10px;padding:13px;color:var(--text);font-family:var(--sans);font-size:13.5px;line-height:1.55;outline:none;resize:vertical}
-.ta:focus{border-color:var(--accent)}.ta::placeholder{color:var(--faint)}
-.j-actions{display:flex;gap:9px;margin-top:11px;justify-content:flex-end}
-.j-row{padding:13px 0;border-bottom:1px solid var(--line)}.j-row:last-child{border:none}
-.j-top{display:flex;align-items:center;gap:11px;margin-bottom:6px}
-.j-date{font-size:11px;color:var(--faint)}
-.link-btn{background:none;border:none;color:var(--accent);font-family:var(--mono);font-size:11px;cursor:pointer;padding:0;letter-spacing:.04em}
-.j-sum{font-size:13.5px;line-height:1.5}
-.j-raw{margin-top:9px;padding:11px;background:var(--bg3);border-radius:8px;font-size:13px;line-height:1.6;color:var(--muted);white-space:pre-wrap}
-
-/* ring (kept for compatibility) */
-.ring-num{fill:var(--text);font-family:var(--mono);font-size:21px}
-.ring-sub{fill:var(--faint);font-size:9px;letter-spacing:.1em;text-transform:uppercase}
+.jlist{display:flex;flex-direction:column;gap:10px}
+.jentry{background:var(--bg3);border:1px solid var(--line);border-radius:9px;padding:12px 13px}
+.jdate{font-size:10px;letter-spacing:.1em;color:var(--accent);margin-bottom:5px}
+.jsum{font-size:13px;color:var(--muted);font-style:italic;margin-bottom:6px;line-height:1.5}
+.jbody{font-size:13px;line-height:1.55;color:var(--text);white-space:pre-wrap}
 
 /* toast */
-.toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:var(--bg3);border:1px solid var(--line2);color:var(--text);padding:11px 18px;border-radius:10px;font-size:13px;box-shadow:0 8px 30px rgba(0,0,0,.5);z-index:50}
-
-@media(max-width:1080px){ .cols{grid-template-columns:1fr} }
-@media(max-width:760px){
-  .topbar{gap:12px;padding:0 12px}
-  .os-main{padding:14px 12px 40px}
-  .goals-grid,.brain-grid,.macro-row,.habit-cards{grid-template-columns:1fr}
-  .greeting{font-size:25px}
-}
+.toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--bg3);border:1px solid var(--accent);color:var(--text);padding:10px 18px;border-radius:9px;font-size:13px;z-index:50;box-shadow:0 8px 30px rgba(0,0,0,.5)}
 `}</style>
   );
 }
