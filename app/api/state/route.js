@@ -37,7 +37,7 @@ export async function GET() {
     supabase.from("profile").select("*").eq("id", 1).single(),
     supabase.from("events").select("*").gte("day", iso(monday)).lte("day", iso(sunday)).order("start_min"),
     supabase.from("weekly_tasks").select("*").order("created_at"),
-    supabase.from("daily_tasks").select("*").eq("day", today).order("created_at"),
+    supabase.from("daily_tasks").select("*").gte("day", iso(monday)).lte("day", iso(sunday)).order("created_at"),
     supabase.from("goals").select("*").order("created_at", { ascending: false }),
     supabase.from("meals").select("*").eq("day", today).order("eaten_at", { ascending: false }),
     supabase.from("journal").select("*").order("created_at", { ascending: false }).limit(60),
@@ -56,9 +56,10 @@ export async function GET() {
   return NextResponse.json({
     profile: profile.data || { name: "Hayden", role: "", org: "" },
     week: iso(monday),
+    todayIso: today,
     events: (events.data || []).map((e) => ({ id: e.id, day: e.day, startMin: e.start_min, endMin: e.end_min, title: e.title })),
     weeklyTasks: (wtasks.data || []).map((t) => ({ id: t.id, title: t.title, done: t.done, pinned: t.pinned })),
-    dailyTasks: (dtasks.data || []).map((t) => ({ id: t.id, title: t.title, done: t.done })),
+    dailyTasks: (dtasks.data || []).map((t) => ({ id: t.id, title: t.title, done: t.done, day: t.day })),
     recurring: recurring.map((r) => ({ id: r.id, title: r.title, weekday: r.weekday })),
     goals: (goals.data || []).map((g) => ({ id: g.id, text: g.body, scope: g.scope, done: g.done })),
     meals: mealsToday.map((m) => ({

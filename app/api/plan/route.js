@@ -50,7 +50,7 @@ export async function POST() {
   if (tasks.length) {
     const rows = tasks.map((t) => ({ title: t.trim(), day: today }));
     const { data } = await supabase.from("daily_tasks").insert(rows).select();
-    added = (data || []).map((r) => ({ id: r.id, title: r.title, done: r.done }));
+    added = (data || []).map((r) => ({ id: r.id, title: r.title, done: r.done, day: r.day }));
   }
   return NextResponse.json({ added });
 }

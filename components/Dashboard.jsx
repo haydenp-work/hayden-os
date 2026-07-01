@@ -27,6 +27,32 @@ const isoLocal = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.get
 const hhmmToMin = (s) => { const m = String(s || "").match(/(\d{1,2}):(\d{2})/); return m ? Number(m[1]) * 60 + Number(m[2]) : null; };
 function minLabel(min) { const h = Math.floor(min / 60), m = min % 60; const ap = h < 12 ? "AM" : "PM"; const h12 = h % 12 === 0 ? 12 : h % 12; return `${h12}${m ? ":" + pad(m) : ""} ${ap}`; }
 
+// Pack overlapping events into side by side columns so they all stay visible.
+function layoutDay(evs) {
+  const items = [...evs].sort((a, b) => a.startMin - b.startMin || a.endMin - b.endMin);
+  const out = [];
+  let cluster = [], clusterEnd = -1;
+  const flush = () => {
+    if (!cluster.length) return;
+    const colEnds = [];
+    const cols = cluster.map((e) => {
+      let c = 0;
+      while (colEnds[c] !== undefined && colEnds[c] > e.startMin) c++;
+      colEnds[c] = e.endMin;
+      return c;
+    });
+    const n = colEnds.length;
+    cluster.forEach((e, i) => out.push({ ...e, _col: cols[i], _cols: n }));
+    cluster = []; clusterEnd = -1;
+  };
+  for (const e of items) {
+    if (cluster.length && e.startMin >= clusterEnd) flush();
+    cluster.push(e); clusterEnd = Math.max(clusterEnd, e.endMin);
+  }
+  flush();
+  return out;
+}
+
 async function mutate(action, payload) {
   try {
     const res = await fetch("/api/mutate", { method: "POST", cache: "no-store", headers: { "content-type": "application/json" }, body: JSON.stringify({ action, payload }) });
@@ -105,17 +131,18 @@ export default function Dashboard() {
     setMkLoading(true); setMkReply("");
     const r = await post("/api/command", { text: t });
     setMkReply(r.reply || "Done."); setMkText("");
-    await load();
-    // Guarantee anything just created shows, even if the refetch missed it.
-    if (r.created) {
-      patch((p) => {
-        (r.created.daily || []).forEach((x) => { if (!p.dailyTasks.some((d) => d.id === x.id)) p.dailyTasks.push({ id: x.id, title: x.title, done: !!x.done }); });
-        (r.created.weekly || []).forEach((x) => { if (!p.weeklyTasks.some((d) => d.id === x.id)) p.weeklyTasks.push({ id: x.id, title: x.title, done: !!x.done, pinned: !!x.pinned }); });
-        (r.created.goals || []).forEach((x) => { if (!p.goals.some((d) => d.id === x.id)) p.goals.unshift({ id: x.id, text: x.body, scope: x.scope, done: !!x.done }); });
-        (r.created.events || []).forEach((x) => { if (!p.events.some((d) => d.id === x.id)) p.events.push({ id: x.id, day: x.day, startMin: x.start_min, endMin: x.end_min, title: x.title }); });
-        (r.created.recurring || []).forEach((x) => { if (!p.recurring) p.recurring = []; if (!p.recurring.some((d) => d.id === x.id)) p.recurring.push({ id: x.id, title: x.title, weekday: x.weekday }); });
-      });
-    }
+    patch((p) => {
+      const c = r.created || {};
+      (c.daily || []).forEach((x) => { if (!p.dailyTasks.some((d) => d.id === x.id)) p.dailyTasks.push({ id: x.id, title: x.title, done: !!x.done, day: x.day || p.todayIso }); });
+      (c.weekly || []).forEach((x) => { if (!p.weeklyTasks.some((d) => d.id === x.id)) p.weeklyTasks.push({ id: x.id, title: x.title, done: !!x.done, pinned: !!x.pinned }); });
+      (c.goals || []).forEach((x) => { if (!p.goals.some((d) => d.id === x.id)) p.goals.unshift({ id: x.id, text: x.body, scope: x.scope, done: !!x.done }); });
+      (c.events || []).forEach((x) => { if (!p.events.some((d) => d.id === x.id)) p.events.push({ id: x.id, day: x.day, startMin: x.start_min, endMin: x.end_min, title: x.title }); });
+      (c.recurring || []).forEach((x) => { if (!p.recurring) p.recurring = []; if (!p.recurring.some((d) => d.id === x.id)) p.recurring.push({ id: x.id, title: x.title, weekday: x.weekday }); });
+      const comp = r.completed || {};
+      (comp.daily || []).forEach((id) => { const tt = p.dailyTasks.find((d) => d.id === id); if (tt) tt.done = true; });
+      (comp.weekly || []).forEach((id) => { const tt = p.weeklyTasks.find((d) => d.id === id); if (tt) tt.done = true; });
+      (r.pinned || []).forEach((id) => { const tt = p.weeklyTasks.find((d) => d.id === id); if (tt) tt.pinned = true; });
+    });
     setMkLoading(false);
   }
   function mkMic() {
@@ -133,7 +160,7 @@ export default function Dashboard() {
   }
 
   /* ---------- daily tasks ---------- */
-  async function addDaily(v) { const t = (v ?? dtaskInput).trim(); if (!t) return; const r = await mutate("dtask.add", { title: t }); if (r && r.error) { flash("Could not save: " + r.error); return; } patch((p) => { p.dailyTasks.push({ id: r.id || uid(), title: t, done: false }); }); setDtaskInput(""); }
+  async function addDaily(v) { const t = (v ?? dtaskInput).trim(); if (!t) return; const r = await mutate("dtask.add", { title: t }); if (r && r.error) { flash("Could not save: " + r.error); return; } patch((p) => { p.dailyTasks.push({ id: r.id || uid(), title: t, done: false, day: p.todayIso }); }); setDtaskInput(""); }
   function toggleDaily(id, done) { patch((p) => { const x = p.dailyTasks.find((t) => t.id === id); if (x) x.done = done; }); mutate("dtask.toggle", { id, done }); }
   function delDaily(id) { patch((p) => { p.dailyTasks = p.dailyTasks.filter((t) => t.id !== id); }); mutate("dtask.delete", { id }); }
   function delRecurring(id) { patch((p) => { p.recurring = (p.recurring || []).filter((r) => r.id !== id); }); mutate("recurring.delete", { id }); }
@@ -214,6 +241,8 @@ export default function Dashboard() {
     const hour = now.getHours();
     const greet = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
     const pinned = os.weeklyTasks.filter((t) => t.pinned && !t.done);
+    const todayTasks = os.dailyTasks.filter((t) => t.day === os.todayIso && !t.done);
+    const completedTasks = os.dailyTasks.filter((t) => t.done);
     const nut = os.nutrition;
     const pPct = nut.proteinGoal ? Math.min(100, Math.round((nut.protein / nut.proteinGoal) * 100)) : 0;
 
@@ -248,14 +277,14 @@ export default function Dashboard() {
                   <span className="tag-pin"><Pin size={11} /> weekly</span>
                 </div>
               ))}
-              {os.dailyTasks.map((t) => (
+              {todayTasks.map((t) => (
                 <div key={t.id} className="row">
-                  <button className={t.done ? "check on" : "check"} onClick={() => toggleDaily(t.id, !t.done)}>{t.done && <Check size={13} />}</button>
-                  <span className={t.done ? "row-title strike" : "row-title"}>{t.title}</span>
+                  <button className="check" onClick={() => toggleDaily(t.id, true)}></button>
+                  <span className="row-title">{t.title}</span>
                   <button className="icon-btn faint" onClick={() => delDaily(t.id)}><X size={13} /></button>
                 </div>
               ))}
-              {pinned.length === 0 && os.dailyTasks.length === 0 && <div className="empty">Nothing yet. Pin a weekly task or hit Plan my day.</div>}
+              {pinned.length === 0 && todayTasks.length === 0 && <div className="empty">Nothing yet. Pin a weekly task or hit Plan my day.</div>}
             </div>
             <div className="cap" style={{ marginTop: 12 }}>
               <input className="cap-inp" placeholder="Add a task for today" value={dtaskInput} onChange={(e) => setDtaskInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addDaily(); }} />
@@ -325,6 +354,21 @@ export default function Dashboard() {
               <input className="cap-inp" placeholder="Add a monthly goal" value={goalInput} onChange={(e) => setGoalInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { setGoalScope("month"); addGoal(); } }} />
               <button className="cap-go" onClick={() => { setGoalScope("month"); addGoal(); }}><Plus size={15} /></button>
             </div>
+          </div>
+        </div>
+
+        {/* COMPLETED THIS WEEK */}
+        <div className="panel">
+          <div className="plabel"><Check size={13} /> COMPLETED THIS WEEK <span className="pcount mono">{completedTasks.length} done</span></div>
+          <div className="list">
+            {completedTasks.map((t) => (
+              <div key={t.id} className="row">
+                <button className="check on" onClick={() => toggleDaily(t.id, false)}><Check size={13} /></button>
+                <span className="row-title strike">{t.title}</span>
+                <button className="icon-btn faint" onClick={() => delDaily(t.id)}><Trash2 size={12} /></button>
+              </div>
+            ))}
+            {completedTasks.length === 0 && <div className="empty">Finished tasks land here for the week. Check one off in Today to start.</div>}
           </div>
         </div>
       </div>
@@ -580,7 +624,7 @@ function WeekCalendar({ days, events, now, onDelete, tall }) {
         <div className="cal-cols">
           {days.map((d, i) => {
             const dayIso = isoOf(d);
-            const evs = events.filter((e) => e.day === dayIso);
+            const evs = layoutDay(events.filter((e) => e.day === dayIso));
             return (
               <div key={i} className="cal-col">
                 {hours.slice(0, -1).map((hr) => <div key={hr} className="cal-slot" style={{ height: HOUR_H }} />)}
@@ -588,8 +632,10 @@ function WeekCalendar({ days, events, now, onDelete, tall }) {
                 {evs.map((e) => {
                   const top = Math.max(0, ((e.startMin - START_HOUR * 60) / 60) * HOUR_H);
                   const height = Math.max(18, ((e.endMin - e.startMin) / 60) * HOUR_H - 2);
+                  const wPct = 100 / e._cols;
+                  const leftPct = e._col * wPct;
                   return (
-                    <button key={e.id} className="cal-ev" style={{ top, height }} onClick={() => onDelete(e.id)} title="Tap to delete">
+                    <button key={e.id} className="cal-ev" style={{ top, height, left: `calc(${leftPct}% + 2px)`, width: `calc(${wPct}% - 4px)`, right: "auto" }} onClick={() => onDelete(e.id)} title="Tap to delete">
                       <span className="cal-ev-t mono">{minLabel(e.startMin)}</span>
                       <span className="cal-ev-title">{e.title}</span>
                     </button>
