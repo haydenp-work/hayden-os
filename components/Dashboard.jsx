@@ -84,6 +84,7 @@ export default function Dashboard() {
   const [view, setView] = useState("home");
   const [now, setNow] = useState(new Date());
   const [toast, setToast] = useState(null);
+  const [repeatOpen, setRepeatOpen] = useState(false);
 
   const [mkText, setMkText] = useState("");
   const [mkReply, setMkReply] = useState("");
@@ -310,8 +311,12 @@ export default function Dashboard() {
             </div>
             {(os.recurring || []).length > 0 && (
               <div className="repeating">
-                <div className="rep-label">Repeating</div>
-                {os.recurring.map((r) => (
+                <button className="rep-toggle" onClick={() => setRepeatOpen((v) => !v)}>
+                  <ChevronRight size={12} className={repeatOpen ? "rep-caret open" : "rep-caret"} />
+                  <span className="rep-label">Repeating</span>
+                  <span className="rep-count mono">{os.recurring.length}</span>
+                </button>
+                {repeatOpen && os.recurring.map((r) => (
                   <div key={r.id} className="rep-row">
                     <span className="rep-day mono">{["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][r.weekday]}</span>
                     <span className="rep-title">{r.title}</span>
@@ -818,6 +823,12 @@ function Style() {
 /* repeating reminders */
 .repeating{margin-top:12px;padding-top:10px;border-top:1px solid var(--line)}
 .rep-label{font-family:var(--mono);font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);margin-bottom:6px}
+.rep-toggle{display:flex;align-items:center;gap:7px;width:100%;background:none;border:none;cursor:pointer;padding:2px 2px 6px;margin-bottom:2px}
+.rep-toggle .rep-label{margin-bottom:0}
+.rep-toggle:hover .rep-label{color:var(--muted)}
+.rep-caret{color:var(--faint);transition:transform .15s ease;flex:none}
+.rep-caret.open{transform:rotate(90deg)}
+.rep-count{margin-left:auto;font-size:10px;color:var(--faint);background:var(--bg3);border-radius:10px;padding:1px 7px}
 .rep-row{display:flex;align-items:center;gap:9px;padding:5px 4px;border-radius:7px}
 .rep-row:hover{background:var(--bg3)}
 .rep-day{font-size:10px;color:var(--gold);flex:none;width:30px;letter-spacing:.06em}
