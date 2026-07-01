@@ -7,10 +7,17 @@ export const runtime = "nodejs";
 
 const thisMonth = () => monthET();
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
-const WD = { sunday: 0, monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6 };
+const WD = { sun: 0, sunday: 0, mon: 1, monday: 1, tue: 2, tues: 2, tuesday: 2, wed: 3, weds: 3, wednesday: 3, thu: 4, thur: 4, thurs: 4, thursday: 4, fri: 5, friday: 5, sat: 6, saturday: 6 };
 
 function mondayOf(d) { const x = new Date(d); const off = (x.getDay() + 6) % 7; x.setDate(x.getDate() - off); x.setHours(0, 0, 0, 0); return x; }
-const hhmmToMin = (s) => { const m = String(s || "").match(/(\d{1,2}):(\d{2})/); return m ? Number(m[1]) * 60 + Number(m[2]) : null; };
+const hhmmToMin = (s) => {
+  const m = String(s || "").match(/(\d{1,2}):(\d{2})\s*(am|pm)?/i);
+  if (!m) return null;
+  let h = Number(m[1]); const min = Number(m[2]); const ap = (m[3] || "").toLowerCase();
+  if (ap === "pm" && h < 12) h += 12;
+  if (ap === "am" && h === 12) h = 0;
+  return h * 60 + min;
+};
 
 export async function POST(req) {
   const { type, image, mediaType } = await req.json().catch(() => ({}));
@@ -36,16 +43,27 @@ export async function POST(req) {
 
     if (type === "schedule") {
       const out = await askClaudeImage(
-        "This is a screenshot of a weekly schedule or calendar. Extract each scheduled item. " +
-          "Return ONLY JSON, no prose: {\"events\":[{\"title\":\"...\",\"weekday\":\"Monday\",\"start\":\"HH:MM\",\"end\":\"HH:MM\"}]} " +
-          "using a 24 hour clock. If an item has no clear time, use start 09:00 and end 10:00. weekday must be a full day name.",
-        image, mt, { maxTokens: 900 }
+        "This is a screenshot of a weekly GRID calendar (Outlook or Teams style). " +
+          "The columns are days of the week, labeled in the header like Monday, Tuesday, Wednesday. " +
+          "The rows are hours, labeled down the LEFT edge like 8 AM, 9 AM, 12 PM, 2 PM, 3 PM. " +
+          "Each event is a colored block. Work out each event's START and END time from its VERTICAL POSITION: " +
+          "the TOP edge of the block lines up with its start time and the BOTTOM edge with its end time, read against the hour labels on the left. " +
+          "A block that starts halfway between 2 PM and 3 PM starts at 2:30 PM. Convert every time to a 24 hour HH:MM. " +
+          "Put each event in the day of the column it sits in. " +
+          "For the title use the main first line of the block only, ignore lines that just say 'Microsoft Teams Meeting' and ignore the organizer's name. " +
+          "SKIP any block whose title starts with 'Canceled'. SKIP all day banners across the top such as holidays. " +
+          "Return ONLY JSON, no prose: {\"events\":[{\"title\":\"...\",\"weekday\":\"Wednesday\",\"start\":\"HH:MM\",\"end\":\"HH:MM\"}]}",
+        image, mt, { maxTokens: 1500 }
       );
       const j = parseJson(out);
+      const raw = (j.events || []).length;
       const mondayIso = mondayISO_ET();
       const rows = [];
       for (const e of (j.events || [])) {
-        const wd = WD[String(e.weekday || "").toLowerCase()];
+        let wd = null;
+        const k = String(e.weekday || "").toLowerCase().trim();
+        if (k in WD) wd = WD[k];
+        if (wd == null && e.date) { const m = String(e.date).match(/\d{4}-\d{2}-\d{2}/); if (m) wd = new Date(m[0] + "T12:00:00Z").getUTCDay(); }
         if (wd == null || !e.title) continue;
         const dayIso = addDaysISO(mondayIso, (wd + 6) % 7);
         const s = hhmmToMin(e.start) ?? 540;
@@ -54,10 +72,11 @@ export async function POST(req) {
       }
       let inserted = [];
       if (rows.length) {
-        const { data } = await supabase.from("events").insert(rows).select();
+        const { data, error } = await supabase.from("events").insert(rows).select();
+        if (error) return NextResponse.json({ error: error.message, raw, placed: 0, events: [] }, { status: 500 });
         inserted = (data || []).map((r) => ({ id: r.id, day: r.day, startMin: r.start_min, endMin: r.end_min, title: r.title }));
       }
-      return NextResponse.json({ events: inserted });
+      return NextResponse.json({ events: inserted, raw, placed: rows.length });
     }
 
     return NextResponse.json({ error: "unknown type" }, { status: 400 });

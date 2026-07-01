@@ -239,9 +239,22 @@ export default function Dashboard() {
   }
   async function importSchedShot(file) {
     if (!file) return; setImpSched(true);
-    try { const { data, mediaType } = await fileToBase64(file); const r = await post("/api/import", { type: "schedule", image: data, mediaType });
-      if (r && Array.isArray(r.events) && r.events.length) { await load(); flash(`Added ${r.events.length} events to your week.`); }
-      else flash("Could not read that schedule.");
+    try {
+      const { data, mediaType } = await fileToBase64(file);
+      const r = await post("/api/import", { type: "schedule", image: data, mediaType });
+      if (r && Array.isArray(r.events) && r.events.length) {
+        patch((p) => { r.events.forEach((e) => { if (!p.events.some((x) => x.id === e.id)) p.events.push(e); }); });
+        await load();
+        const f = r.events[0];
+        const dName = new Date(f.day + "T12:00:00Z").toLocaleDateString([], { weekday: "short" });
+        flash(`Added ${r.events.length} events. First: ${dName} ${minLabel(f.startMin)} ${f.title}.`);
+      } else if (r && r.error) {
+        flash("Import error: " + r.error);
+      } else if (r && r.raw > 0) {
+        flash("Read the schedule but could not match the days. Try a clearer shot with weekdays visible.");
+      } else {
+        flash("Could not read that schedule.");
+      }
     } catch (e) { flash("Import failed."); }
     setImpSched(false); if (schedFileRef.current) schedFileRef.current.value = "";
   }
