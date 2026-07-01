@@ -29,12 +29,12 @@ function minLabel(min) { const h = Math.floor(min / 60), m = min % 60; const ap 
 
 async function mutate(action, payload) {
   try {
-    const res = await fetch("/api/mutate", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action, payload }) });
+    const res = await fetch("/api/mutate", { method: "POST", cache: "no-store", headers: { "content-type": "application/json" }, body: JSON.stringify({ action, payload }) });
     return await res.json().catch(() => ({}));
   } catch (e) { return {}; }
 }
 async function post(path, body) {
-  const res = await fetch(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body || {}) });
+  const res = await fetch(path, { method: "POST", cache: "no-store", headers: { "content-type": "application/json" }, body: JSON.stringify(body || {}) });
   return res.json().catch(() => ({}));
 }
 function fileToBase64(file) {
@@ -92,7 +92,7 @@ export default function Dashboard() {
   useEffect(() => { const t = setInterval(() => setNow(new Date()), 30000); return () => clearInterval(t); }, []);
 
   async function load() {
-    const res = await fetch("/api/state");
+    const res = await fetch("/api/state", { cache: "no-store" });
     if (res.status === 401) { window.location.href = "/login"; return; }
     setOs(await res.json());
   }
@@ -106,6 +106,16 @@ export default function Dashboard() {
     const r = await post("/api/command", { text: t });
     setMkReply(r.reply || "Done."); setMkText("");
     await load();
+    // Guarantee anything just created shows, even if the refetch missed it.
+    if (r.created) {
+      patch((p) => {
+        (r.created.daily || []).forEach((x) => { if (!p.dailyTasks.some((d) => d.id === x.id)) p.dailyTasks.push({ id: x.id, title: x.title, done: !!x.done }); });
+        (r.created.weekly || []).forEach((x) => { if (!p.weeklyTasks.some((d) => d.id === x.id)) p.weeklyTasks.push({ id: x.id, title: x.title, done: !!x.done, pinned: !!x.pinned }); });
+        (r.created.goals || []).forEach((x) => { if (!p.goals.some((d) => d.id === x.id)) p.goals.unshift({ id: x.id, text: x.body, scope: x.scope, done: !!x.done }); });
+        (r.created.events || []).forEach((x) => { if (!p.events.some((d) => d.id === x.id)) p.events.push({ id: x.id, day: x.day, startMin: x.start_min, endMin: x.end_min, title: x.title }); });
+        (r.created.recurring || []).forEach((x) => { if (!p.recurring) p.recurring = []; if (!p.recurring.some((d) => d.id === x.id)) p.recurring.push({ id: x.id, title: x.title, weekday: x.weekday }); });
+      });
+    }
     setMkLoading(false);
   }
   function mkMic() {

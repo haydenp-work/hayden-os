@@ -73,5 +73,5 @@ export async function GET() {
       month,
       history: spendRows.map((r) => ({ month: r.month, spent: Number(r.spent) })),
     },
-  });
+  }, { headers: { "Cache-Control": "no-store, max-age=0" } });
 }
