@@ -49,7 +49,8 @@ export async function POST() {
   let added = [];
   if (tasks.length) {
     const rows = tasks.map((t) => ({ title: t.trim(), day: today }));
-    const { data } = await supabase.from("daily_tasks").insert(rows).select();
+    const { data, error } = await supabase.from("daily_tasks").insert(rows).select();
+    if (error) return NextResponse.json({ error: error.message, added: [] }, { status: 500 });
     added = (data || []).map((r) => ({ id: r.id, title: r.title, done: r.done, day: r.day }));
   }
   return NextResponse.json({ added });

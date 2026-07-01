@@ -45,7 +45,7 @@ export async function GET() {
         changed = true;
       }
     }
-    if (changed) await supabase.from("app_settings").upsert({ key: ledgerKey, value: JSON.stringify(placed) });
+    if (changed) await supabase.from("app_settings").upsert({ key: ledgerKey, value: JSON.stringify(placed) }, { onConflict: "key" });
   } catch (e) { /* best effort, never block the dashboard */ }
 
   const [profile, events, wtasks, dtasks, goals, meals, journal, settings, spend] = await Promise.all([

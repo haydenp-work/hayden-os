@@ -37,7 +37,8 @@ export async function POST(req) {
       const month = thisMonth();
       const { data: cur } = await supabase.from("monthly_spend").select("spent").eq("month", month).single();
       const newTotal = round2((cur ? Number(cur.spent) : 0) + add);
-      await supabase.from("monthly_spend").upsert({ month, spent: newTotal });
+      const { error: upErr } = await supabase.from("monthly_spend").upsert({ month, spent: newTotal }, { onConflict: "month" });
+      if (upErr) return NextResponse.json({ error: upErr.message }, { status: 500 });
       return NextResponse.json({ added: add, newTotal });
     }
 
@@ -74,7 +75,12 @@ export async function POST(req) {
       if (rows.length) {
         const { data, error } = await supabase.from("events").insert(rows).select();
         if (error) return NextResponse.json({ error: error.message, raw, placed: 0, events: [] }, { status: 500 });
-        inserted = (data || []).map((r) => ({ id: r.id, day: r.day, startMin: r.start_min, endMin: r.end_min, title: r.title }));
+        const ids = (data || []).map((r) => r.id);
+        // Read the rows back to prove they actually persisted before claiming success.
+        const { data: verify } = await supabase.from("events").select("id, day, start_min, end_min, title").in("id", ids);
+        const confirmed = verify || [];
+        if (confirmed.length === 0) return NextResponse.json({ error: "events did not persist", raw, placed: rows.length, events: [] }, { status: 500 });
+        inserted = confirmed.map((r) => ({ id: r.id, day: r.day, startMin: r.start_min, endMin: r.end_min, title: r.title }));
       }
       return NextResponse.json({ events: inserted, raw, placed: rows.length });
     }

@@ -159,27 +159,51 @@ export default function Dashboard() {
   async function planDay() {
     setPlanning(true);
     const r = await post("/api/plan", {});
-    if (r.added && r.added.length) { patch((p) => { p.dailyTasks = [...p.dailyTasks, ...r.added]; }); flash(`Added ${r.added.length} tasks to today.`); }
+    if (r && r.error) flash("Plan failed: " + r.error);
+    else if (r.added && r.added.length) { patch((p) => { p.dailyTasks = [...p.dailyTasks, ...r.added]; }); flash(`Added ${r.added.length} tasks to today.`); }
     else flash("Nothing new to add right now.");
     setPlanning(false);
   }
 
+  // A change already shown on screen; persist it in the background and, if the DB rejects it, say so and resync to the truth.
+  function persistBg(action, payload, label) {
+    mutate(action, payload).then((r) => { if (!r || r.error) { flash((label || "Save failed") + (r && r.error ? ": " + r.error : "")); load(); } });
+  }
+
   /* ---------- daily tasks ---------- */
-  async function addDaily(v) { const t = (v ?? dtaskInput).trim(); if (!t) return; const r = await mutate("dtask.add", { title: t }); if (r && r.error) { flash("Could not save: " + r.error); return; } patch((p) => { p.dailyTasks.push({ id: r.id || uid(), title: t, done: false, day: p.todayIso }); }); setDtaskInput(""); }
-  function toggleDaily(id, done) { patch((p) => { const x = p.dailyTasks.find((t) => t.id === id); if (x) x.done = done; }); mutate("dtask.toggle", { id, done }); }
-  function delDaily(id) { patch((p) => { p.dailyTasks = p.dailyTasks.filter((t) => t.id !== id); }); mutate("dtask.delete", { id }); }
-  function delRecurring(id) { patch((p) => { p.recurring = (p.recurring || []).filter((r) => r.id !== id); }); mutate("recurring.delete", { id }); }
+  async function addDaily(v) {
+    const t = (v ?? dtaskInput).trim(); if (!t) return;
+    const r = await mutate("dtask.add", { title: t });
+    if (!r || r.error || !r.id) { flash("Could not save task" + (r && r.error ? ": " + r.error : "")); return; }
+    patch((p) => { p.dailyTasks.push({ id: r.id, title: t, done: false, day: p.todayIso }); });
+    setDtaskInput("");
+  }
+  function toggleDaily(id, done) { patch((p) => { const x = p.dailyTasks.find((t) => t.id === id); if (x) x.done = done; }); persistBg("dtask.toggle", { id, done }, "Could not update task"); }
+  function delDaily(id) { patch((p) => { p.dailyTasks = p.dailyTasks.filter((t) => t.id !== id); }); persistBg("dtask.delete", { id }, "Could not delete task"); }
+  function delRecurring(id) { patch((p) => { p.recurring = (p.recurring || []).filter((r) => r.id !== id); }); persistBg("recurring.delete", { id }, "Could not delete reminder"); }
 
   /* ---------- weekly tasks ---------- */
-  async function addWeekly() { const t = wtaskInput.trim(); if (!t) return; const r = await mutate("wtask.add", { title: t }); patch((p) => { p.weeklyTasks.push({ id: r.id || uid(), title: t, done: false, pinned: false }); }); setWtaskInput(""); }
-  function toggleWeekly(id, done) { patch((p) => { const x = p.weeklyTasks.find((t) => t.id === id); if (x) x.done = done; }); mutate("wtask.toggle", { id, done }); }
-  function pinWeekly(id, pinned) { patch((p) => { const x = p.weeklyTasks.find((t) => t.id === id); if (x) x.pinned = pinned; }); mutate("wtask.pin", { id, pinned }); }
-  function delWeekly(id) { patch((p) => { p.weeklyTasks = p.weeklyTasks.filter((t) => t.id !== id); }); mutate("wtask.delete", { id }); }
+  async function addWeekly() {
+    const t = wtaskInput.trim(); if (!t) return;
+    const r = await mutate("wtask.add", { title: t });
+    if (!r || r.error || !r.id) { flash("Could not save task" + (r && r.error ? ": " + r.error : "")); return; }
+    patch((p) => { p.weeklyTasks.push({ id: r.id, title: t, done: false, pinned: false }); });
+    setWtaskInput("");
+  }
+  function toggleWeekly(id, done) { patch((p) => { const x = p.weeklyTasks.find((t) => t.id === id); if (x) x.done = done; }); persistBg("wtask.toggle", { id, done }, "Could not update task"); }
+  function pinWeekly(id, pinned) { patch((p) => { const x = p.weeklyTasks.find((t) => t.id === id); if (x) x.pinned = pinned; }); persistBg("wtask.pin", { id, pinned }, "Could not pin task"); }
+  function delWeekly(id) { patch((p) => { p.weeklyTasks = p.weeklyTasks.filter((t) => t.id !== id); }); persistBg("wtask.delete", { id }, "Could not delete task"); }
 
   /* ---------- goals ---------- */
-  async function addGoal() { const t = goalInput.trim(); if (!t) return; const r = await mutate("goal.add", { text: t, scope: goalScope }); patch((p) => { p.goals.unshift({ id: r.id || uid(), text: t, scope: goalScope, done: false }); }); setGoalInput(""); }
-  function toggleGoal(id, done) { patch((p) => { const x = p.goals.find((g) => g.id === id); if (x) x.done = done; }); mutate("goal.toggle", { id, done }); }
-  function delGoal(id) { patch((p) => { p.goals = p.goals.filter((g) => g.id !== id); }); mutate("goal.delete", { id }); }
+  async function addGoal() {
+    const t = goalInput.trim(); if (!t) return;
+    const r = await mutate("goal.add", { text: t, scope: goalScope });
+    if (!r || r.error || !r.id) { flash("Could not save goal" + (r && r.error ? ": " + r.error : "")); return; }
+    patch((p) => { p.goals.unshift({ id: r.id, text: t, scope: goalScope, done: false }); });
+    setGoalInput("");
+  }
+  function toggleGoal(id, done) { patch((p) => { const x = p.goals.find((g) => g.id === id); if (x) x.done = done; }); persistBg("goal.toggle", { id, done }, "Could not update goal"); }
+  function delGoal(id) { patch((p) => { p.goals = p.goals.filter((g) => g.id !== id); }); persistBg("goal.delete", { id }, "Could not delete goal"); }
 
   /* ---------- events ---------- */
   async function addEvent() {
@@ -187,30 +211,28 @@ export default function Dashboard() {
     const day = evDay || isoLocal(now);
     const s = hhmmToMin(evStart) ?? 540; const e = hhmmToMin(evEnd) ?? s + 60;
     const r = await mutate("event.add", { day, startMin: s, endMin: e, title });
-    patch((p) => { p.events.push({ id: r.id || uid(), day, startMin: s, endMin: e, title }); });
+    if (!r || r.error || !r.id) { flash("Could not save event" + (r && r.error ? ": " + r.error : "")); return; }
+    patch((p) => { p.events.push({ id: r.id, day, startMin: s, endMin: e, title }); });
     setEvTitle(""); flash("Event added.");
   }
-  function delEvent(id) { patch((p) => { p.events = p.events.filter((e) => e.id !== id); }); mutate("event.delete", { id }); }
+  function delEvent(id) { patch((p) => { p.events = p.events.filter((e) => e.id !== id); }); persistBg("event.delete", { id }, "Could not delete event"); }
 
   /* ---------- meals ---------- */
   async function addMeal() {
     const t = mealText.trim(); if (!t) return; setMealLoading(true);
     const r = await post("/api/meal", { text: t });
-    if (r.meal) patch((p) => { p.meals.unshift(r.meal); p.nutrition.calories += r.meal.calories || 0; p.nutrition.protein += r.meal.protein || 0; });
-    setMealText(""); setMealLoading(false);
+    if (r && r.error) flash("Could not log meal: " + r.error);
+    else if (r && r.meal) { patch((p) => { p.meals.unshift(r.meal); p.nutrition.calories += r.meal.calories || 0; p.nutrition.protein += r.meal.protein || 0; }); setMealText(""); }
+    else flash("Could not log meal.");
+    setMealLoading(false);
   }
-
   function delMeal(id) {
-    patch((p) => {
-      const m = p.meals.find((x) => x.id === id);
-      if (m) { p.nutrition.calories = Math.max(0, p.nutrition.calories - (m.calories || 0)); p.nutrition.protein = Math.max(0, p.nutrition.protein - (m.protein || 0)); }
-      p.meals = p.meals.filter((x) => x.id !== id);
-    });
-    mutate("meal.delete", { id });
+    patch((p) => { const m = p.meals.find((x) => x.id === id); if (m) { p.nutrition.calories = Math.max(0, p.nutrition.calories - (m.calories || 0)); p.nutrition.protein = Math.max(0, p.nutrition.protein - (m.protein || 0)); } p.meals = p.meals.filter((x) => x.id !== id); });
+    persistBg("meal.delete", { id }, "Could not delete meal");
   }
   function resetNutrition() {
     patch((p) => { p.meals = []; p.nutrition.calories = 0; p.nutrition.protein = 0; });
-    mutate("nutrition.reset", {});
+    persistBg("nutrition.reset", {}, "Could not reset nutrition");
     flash("Today's nutrition cleared.");
   }
 
@@ -218,15 +240,17 @@ export default function Dashboard() {
   async function saveJournal() {
     const t = jText.trim(); if (!t) return; setJSaving(true);
     const r = await post("/api/journal", { text: t });
-    if (r.entry) patch((p) => { p.journal.unshift(r.entry); });
-    setJText(""); setJSaving(false); flash("Reflection saved.");
+    if (r && r.error) flash("Could not save: " + r.error);
+    else if (r && r.entry) { patch((p) => { p.journal.unshift(r.entry); }); setJText(""); flash("Reflection saved."); }
+    else flash("Could not save reflection.");
+    setJSaving(false);
   }
   function jMic() { if (jVoice === "listening") return; startVoice((txt) => setJText((p) => (p ? p + " " : "") + txt), setJVoice); }
 
   /* ---------- spend / nutrition settings ---------- */
-  function setSpend(a) { const v = Number(a) || 0; patch((p) => { p.spend.spent = v; }); mutate("spend.set", { amount: v }); flash("Spend updated."); }
-  function setLimit(a) { const v = Number(a) || 0; patch((p) => { p.spend.limit = v; }); mutate("spend.limit", { amount: v }); flash("Limit updated."); }
-  function setProteinGoal(a) { const v = Number(a) || 200; patch((p) => { p.nutrition.proteinGoal = v; }); mutate("protein.goal", { grams: v }); flash("Protein goal updated."); }
+  function setSpend(a) { const v = Number(a) || 0; patch((p) => { p.spend.spent = v; }); persistBg("spend.set", { amount: v }, "Could not update spend"); flash("Spend updated."); }
+  function setLimit(a) { const v = Number(a) || 0; patch((p) => { p.spend.limit = v; }); persistBg("spend.limit", { amount: v }, "Could not update limit"); flash("Limit updated."); }
+  function setProteinGoal(a) { const v = Number(a) || 200; patch((p) => { p.nutrition.proteinGoal = v; }); persistBg("protein.goal", { grams: v }, "Could not update goal"); flash("Protein goal updated."); }
 
   /* ---------- imports ---------- */
   async function importSpendShot(file) {
